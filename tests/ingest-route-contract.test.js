@@ -56,7 +56,7 @@ test('the ingest skill names no delegated worker, dispatch knob, or host-specifi
     /\bparallel\b/i, /subagent_type/i, /general-purpose/i, /spawn_agent/i, /Task\s*\(/,
     /deep-wiki:wiki-[a-z]/, /<plugin_root>\/agents\//, /\bdispatch/i, /\bqualified\b/i,
     /a5_fanout_threshold|a5_worker_timeout_sec/, /claude_route|codex_route/,
-    /temporary agent/i, /generic subagent/i, /Promise\.all/, /invoke[^\n]*(?:agent|worker)/i,
+    /temporary agent/i, /generic subagent/i, /Promise\.all/, /invoke[^\n]*(?:agent|worker)/i, /codex exec/i,
   ]) assert.doesNotMatch(ingest, forbidden);
 });
 
@@ -119,6 +119,20 @@ test('the plugin ships no subagents and the guard rejects each way one could ret
     ['negation after a comma', (write) => write('AGENTS.md',
       'Delegate each page body to a worker rather than the main caller, not to a hook.\n'),
       /AGENTS\.md:1: delegation instruction/],
+    ['"without" is not a prohibition', (write) => write('AGENTS.md',
+      'Delegate each page to a worker without blocking the main caller.\n'),
+      /AGENTS\.md:1: delegation instruction/],
+    ['"no" qualifying a count is not a prohibition', (write) => write('AGENTS.md',
+      'Spawn a subagent for no more than three pages at once.\n'),
+      /AGENTS\.md:1: agent reference/],
+    ['headless agent CLI', (write) => write('CLAUDE.md', 'Run `codex exec` with the page plan.\n'),
+      /CLAUDE\.md:1: headless agent CLI/],
+    ['additional route record', (write) => write('skills/wiki-ingest/SKILL.md', `${ingest}\n<!-- deep-wiki:data -->\n`
+      + '```json\n{"fallback_route":{"mode":"model-worker","child_agents":true}}\n```\n'),
+      /additional route record `fallback_route`/],
+    ['inverted URL clause', (write) => write('skills/wiki-ingest/SKILL.md',
+      ingest.replace('Fetch a URL only when', 'Do not Fetch a URL only when')),
+      /URL contract exact-origin fetch rule is missing/],
     ['missing route record', (write) => write('skills/wiki-ingest/SKILL.md', ingest.replace(/"ingest_route"/, '"route"')),
       /exactly one ingest_route record/],
     ['route record allowing child agents', (write) => write('skills/wiki-ingest/SKILL.md', withRoute('"child_agents":true')),
@@ -147,6 +161,10 @@ test('the plugin ships no subagents and the guard rejects each way one could ret
     'No host launches a child agent.',
     '',
     'The runtime spawns a worker process for the snapshot.',
+    '',
+    'Avoid delegating pages to workers.',
+    '',
+    'Each Agent (the reader of this file) follows the route. deep-wiki ships no subagents.',
     '',
   ].join('\n'))), []);
 });

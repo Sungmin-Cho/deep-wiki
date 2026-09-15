@@ -67,9 +67,11 @@ source:
     - pages_updated  # List of page filenames updated (may be empty array `[]`)
   optional_fields:
     - content_hash   # SHA-256 hash of source content at ingest time
-    - partial_fail   # `partial_fail: true` marker the runtime writes into a
-                     # source record when the third failure registered on one
-                     # pending window commits `ingest-fail` (wiki-ingest §4).
+    - partial_fail   # When the third failure registered on one pending window
+                     # commits `ingest-fail` (wiki-ingest §4), the runtime
+                     # replaces the named source's record with a minimal
+                     # `origin`, `type: partial_fail`, `partial_fail: true`,
+                     # `window` record that omits the required fields above.
                      # Its presence is the `partial-fail-recovery` repair
                      # reason below.
 
@@ -127,7 +129,7 @@ log:
     - delete
     - query-filed      # Auto-filed query synthesis (cross-page synthesis from /wiki-query)
     - setup            # v1.0.0+: emitted by /wiki-setup on initial scaffold (welcome.md seed)
-  repair_reasons:      # Valid `ingest-repair` reason values — see skills/wiki-ingest/SKILL.md Step 1.5
+  repair_reasons:      # Valid `ingest-repair` reason values — see the skills/wiki-ingest/SKILL.md §1 unchanged-hash rule
     - missing-page             # page in log but not on disk
     - page-missing-slug        # page exists but its slug not in any provenance yaml
     - no-prior-terminal-log    # v1.2.1+ R3W2: log.jsonl absence OR non-terminal last log
@@ -161,7 +163,7 @@ failure_state:         # v1.3.0+: partial-fail retry artifacts under .wiki-meta/
     format: tsv
     columns: [source_path, reason, ts]
     cleared_on: "full-success ingest batch"
-    semantics: "Legacy v1.3.x artifact; the current runtime neither reads nor writes it. Per-source retry state is the retry_counter below plus the partial_fail source marker."
+    semantics: "Legacy v1.3.x artifact; the current runtime neither reads nor writes it. Retry state is window-level: the retry_counter below, plus the partial_fail record of the one source named by the terminal registration."
   retry_counter:
     location: .wiki-meta/.pending-scan-retry-count
     format: "<pending_scan_iso>:<count>"   # window key = verbatim .pending-scan ISO-8601 value; the count follows the last colon.

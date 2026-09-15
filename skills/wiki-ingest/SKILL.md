@@ -110,11 +110,13 @@ through §4, naming the first failed source in stable input order, and report
 every other failed source instead: the runtime counts registrations per window
 and commits `ingest-fail` on the third.
 
-When a batch holds more sources or pages than stay fully in view at once, split
-it into groups in stable input order and finish one group at a time — plan it,
-then run §4 for it — before planning the next. Promote the pending window only
-after the last group has committed, so an interrupted session keeps the groups
-already committed and retries only the rest.
+When a batch holds more pages than stay fully in view while writing, commit it in
+groups. Once the page-plan sequence for the whole batch is fixed, split it
+between merge groups, never inside one, keeping stable order. For each group in
+turn, write and validate its plans, then run §4 without its promote step, and
+re-run the snapshot before writing the next group. Promote the pending window
+only after the last group has committed, so an interrupted session keeps the
+groups already committed and retries only the rest.
 
 ## 3. Semantic contracts
 
@@ -208,11 +210,13 @@ conflict rather than permission to overwrite.
 {"executable":"node","argv":["<plugin_root>/scripts/wiki-runtime.js","scan-window","promote","--wiki-root","ABSOLUTE_WIKI_ROOT","--lock-token","LOCK_TOKEN","--expected","EXPECTED_PENDING_UTC_Z","--json"]}
 ```
 
-If a source or page fails, register it under the same token. The first two
-failures preserve the pending window for retry. The third failure journal-commits
-one terminal `ingest-fail` record and only then promotes the window, preventing a
-permanently stuck session without losing the terminal audit. Partial success
-commits only validated entries and retains explicit per-source failure state.
+When a source or page fails, register one failure for the whole run under the
+same token, naming the source §2 selects. The runtime counts registrations per
+pending window, not per source: the first two preserve the window for retry, and
+the third journal-commits one terminal `ingest-fail` record and only then
+promotes the window, preventing a permanently stuck session without losing the
+terminal audit. Partial success commits only the validated merge groups; every
+other failed source is named in the §5 report rather than in runtime state.
 
 <!-- deep-wiki:exec -->
 ```deep-wiki-exec
