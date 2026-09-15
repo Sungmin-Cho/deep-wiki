@@ -82,9 +82,10 @@ the source, widen candidate discovery beyond the snapshot catalog with a
 content search or the optional Obsidian calls above, and decide which pages it
 creates or updates. When several inputs target the same file, merge them into
 one plan entry that keeps every contributing source slug. Fix the resulting
-page-plan sequence once. Then, for each plan in order, analyze it against the
-full current page read from disk, write the complete body, validate it against
-§3, and append the validated manifest entry in memory before advancing.
+page-plan sequence once. Then, for each plan in order, re-read every
+contributing source and the full current page from disk, write the complete
+body, validate it against §3, and append the validated manifest entry in memory
+before advancing.
 
 The inert policy record below is the authority for that loop on both hosts.
 
@@ -93,9 +94,22 @@ The inert policy record below is the authority for that loop on both hosts.
 {"ingest_route":{"hosts":["claude","codex"],"mode":"main-caller-sequential","child_agents":false,"input_order":"stable","per_plan_phases":["analyze","write","validate"],"mutation_gate":"complete-manifest-validated"}}
 ```
 
+Every source in a manifest gets exactly one event, and every page appears in
+exactly one event's list — `pages_created` for a create, `pages_updated` for an
+update. A merged page belongs to the event of its first contributing source in
+stable input order; the other contributors keep their own events without that
+page and stay linked to it through its `sources` frontmatter and provenance.
+
 A source or page that cannot be analyzed, written, or validated fails only its
 own work: register it through the §4 failure path rather than committing a
-partial body.
+partial body. When a merged page fails, leave it out of every event and register
+each of its contributing sources.
+
+When a batch holds more sources or pages than stay fully in view at once, split
+it into groups in stable input order and finish one group at a time — plan it,
+then run §4 for it — before planning the next. Promote the pending window only
+after the last group has committed, so an interrupted session keeps the groups
+already committed and retries only the rest.
 
 ## 3. Semantic contracts
 
@@ -107,7 +121,9 @@ For every proposed page:
 - Update a page whose title, alias, tags, or body topic already covers the
   subject rather than creating a duplicate.
 - Write an update from the complete current page read from disk, never from a
-  remembered or truncated copy, and set its `expected_sha256` from those bytes.
+  remembered or truncated copy, and set its `expected_sha256` to the lowercase
+  SHA-256 hex of those exact bytes. The snapshot lists page names only, so
+  compute the hash yourself.
 - Preserve unrelated existing sections and standard Markdown links, and
   attribute a contradiction to the sources that disagree.
 - Classify a page as created only if it has never appeared as created in the
@@ -129,8 +145,11 @@ The shared manifest shape is:
 
 ## 4. Commit under one owner token
 
-Acquire the lock after planning and before any mutation. Revalidate snapshot
-hashes after acquisition so concurrent changes cannot be overwritten.
+Acquire the lock after planning and before any mutation. The commit re-checks
+every page against disk: a create whose target already exists, or an update
+whose `expected_sha256` no longer matches, fails with `EXPECTED_HASH_CONFLICT`,
+so a concurrent change is never overwritten. Re-read and re-plan that page
+before resubmitting.
 
 <!-- deep-wiki:exec -->
 ```deep-wiki-exec

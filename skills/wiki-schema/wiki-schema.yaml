@@ -67,11 +67,11 @@ source:
     - pages_updated  # List of page filenames updated (may be empty array `[]`)
   optional_fields:
     - content_hash   # SHA-256 hash of source content at ingest time
-    - partial_fail   # v1.4.0+: {ts, failed_pages, reason} sentinel written by
-                     # skills/wiki-ingest/SKILL.md Step 7.6.F when any page in an
-                     # A5 fanout run fails. Drives Step 1.5 hash-skip override
-                     # → `partial-fail-recovery` repair_reason on next session.
-                     # Removed on repair-on-success (Case ii).
+    - partial_fail   # `partial_fail: true` marker the runtime writes into a
+                     # source record when the third failure registered on one
+                     # pending window commits `ingest-fail` (wiki-ingest §4).
+                     # Its presence is the `partial-fail-recovery` repair
+                     # reason below, and inbox cleanup keeps its origin.
 
 index:
   location: .wiki-meta/index.json
@@ -101,25 +101,26 @@ log:
   ts_format: "ISO 8601 UTC with Z suffix, e.g. 2026-04-06T15:00:00Z (NEVER use local time offsets like +09:00)"
   classification:
     pages_created:
-      rule: "File did not exist in pages/ at the start of this action AND has not yet been emitted to pages_created within this batch (intra-batch dedup, v1.2.0+)."
+      rule: "File did not exist in pages/ before this manifest and has never appeared in pages_created in the log."
       invariant: "Each page filename appears in pages_created at most once across the entire log — including within a single multi-source batch."
     pages_updated:
-      rule: "File existed before this action OR was already classified as created earlier in this batch (regardless of whether this source contributed before)."
+      rule: "File existed in pages/ before this manifest."
+    manifest_rule: "Within one manifest every page appears in exactly one event's list, matching its page action. A page merged from several sources is listed only by the event of its first contributing source in stable input order; the other contributors' events omit it."
   optional_fields:     # v1.4.0+ schema-additive — wiki-lint Step 6 LOG-INVARIANT scan unaffected
     pages_failed:
       applies_to: [ingest]
       version: "v1.4.0+"
-      rule: "Emitted on `ingest` lines whenever FAILED_PAGES OR FAILED_WORKERS is non-empty (A5 fanout partial-fail audit). Field omitted from non-ingest lifecycle actions."
+      rule: "Legacy v1.4.x field; the current runtime does not write it. Readers must tolerate it on historical `ingest` lines."
     phase_timing_ms:
       applies_to: [ingest]
       version: "v1.4.2+"
       shape: "{stage_1_analysis, stage_2_fanout, stage_3_write, total} — ms integers"
-      rule: "B3 telemetry on `ingest` lines. Schema-additive — wiki-lint Step 6 LOG-INVARIANT scan unaffected. Field omitted from non-ingest lifecycle actions."
+      rule: "Legacy v1.4.2 telemetry; the current runtime does not write it. Readers must tolerate it on historical `ingest` lines."
   actions:             # Valid action values
     - ingest
     - ingest-skip      # v1.2.0+: source dropped from batch because content_hash unchanged AND wiki-side state intact
     - ingest-repair    # v1.2.1+ (IC1 review fix): hash unchanged but wiki state drift detected (missing page, page-missing-slug, or non-terminal last log) — full ingest forced as self-repair. R3C1 review fix: pages_created MUST be [] (a self-repair restores an existing page's lifecycle, not a new creation; the historical `ingest` line is the canonical pages_created entry). All touched pages go to pages_updated regardless of PRE_BATCH_PAGES classification. wiki-lint Step 6 LOG-INVARIANT scan filters out ingest-repair lines as defense-in-depth.
-    - ingest-fail      # v1.3.0+: emitted when the all-workers-fail retry counter reaches 3 consecutive batches on the same `.pending-scan` window. Promotes window despite failure (releases stuck state); records one affected source partial-fail record and one terminal event timestamped with that window. Counter `.wiki-meta/.pending-scan-retry-count` (format `<pending_scan_iso>:<count>`) resets on any successful batch (full or partial — partial relies on `.failed-sources.tsv` for per-source retry).
+    - ingest-fail      # v1.3.0+: emitted when the third failure registered through `scan-window fail` lands on the same `.pending-scan` window. Promotes the window despite failure (releases stuck state) and records one `partial_fail` source record plus one terminal event timestamped with that window. Counter `.wiki-meta/.pending-scan-retry-count` (format `<pending_scan_iso>:<count>`) restarts at 1 when the window changes and is removed after the terminal commit.
     - update
     - lint
     - rebuild
@@ -130,7 +131,7 @@ log:
     - missing-page             # page in log but not on disk
     - page-missing-slug        # page exists but its slug not in any provenance yaml
     - no-prior-terminal-log    # v1.2.1+ R3W2: log.jsonl absence OR non-terminal last log
-    - partial-fail-recovery    # v1.4.0+: prior batch left `partial_fail` sentinel in sources/<slug>.yaml (A5 fanout audit)
+    - partial-fail-recovery    # v1.4.0+: sources/<slug>.yaml carries the `partial_fail` marker from an `ingest-fail` commit
 
 versions:
   location: .wiki-meta/.versions/
@@ -160,13 +161,13 @@ failure_state:         # v1.3.0+: partial-fail retry artifacts under .wiki-meta/
     format: tsv
     columns: [source_path, reason, ts]
     cleared_on: "full-success ingest batch"
-    semantics: "Path-level retry manifest for partial-fail multi-source ingest. SessionStart hook reads alongside .pending-scan; per-source retry survives across sessions."
+    semantics: "Legacy v1.3.x artifact; the current runtime neither reads nor writes it. Per-source retry state is the retry_counter below plus the partial_fail source marker."
   retry_counter:
     location: .wiki-meta/.pending-scan-retry-count
-    format: "<pending_scan_iso>:<count>"   # window key = verbatim .pending-scan ISO-8601 value (colon-safe parse: window=${saved%:*}, count=${saved##*:}). Shared by single-source (F1) + multi-source (7.5.M-D) paths.
-    threshold: 3       # consecutive all-workers-fail batches before ingest-fail emit
-    cleared_on: "any successful batch (full or partial; partial relies on .failed-sources.tsv for per-source retry)"
-    semantics: "All-workers-fail counter for 3-strike ingest-fail trigger. Counter resets on success; on threshold emit ingest-fail + promote .pending-scan window."
+    format: "<pending_scan_iso>:<count>"   # window key = verbatim .pending-scan ISO-8601 value; the count follows the last colon.
+    threshold: 3       # failures registered on one pending window before ingest-fail emit
+    cleared_on: "a different pending window (the count restarts at 1) or the terminal ingest-fail commit"
+    semantics: "Counter of failures registered through `scan-window fail` on the current pending window. The third commits ingest-fail and promotes the window."
   pending_scan:
     location: .wiki-meta/.pending-scan
     format: "ISO 8601 UTC (YYYY-MM-DDTHH:MM:SSZ)"

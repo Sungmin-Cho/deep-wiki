@@ -25,8 +25,8 @@ being analysed.
 | Emitted `index.json` envelope | `<plugin_root>/hooks/scripts/envelope.js` | `npm run validate-fixture` |
 
 `<plugin_root>/scripts/wiki-runtime.js` is the sole authority for configuration, lock ownership,
-versioning, journaled mutation, derived state and scan-window transitions. Skills and
-agents describe intent; they never mutate wiki state directly.
+versioning, journaled mutation, derived state and scan-window transitions. Skills
+describe intent; they never mutate wiki state directly.
 
 A new entry skill is auto-discovered on both hosts from `skills/<name>/SKILL.md` with
 `user-invocable: true` and `runtime_hosts: [claude, codex]` frontmatter. Register it in
