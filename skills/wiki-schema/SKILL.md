@@ -131,7 +131,8 @@ The wiki-local `.wiki-meta/.config.json` owns `auto_ingest`. The global host YAM
 equivalent legacy policy to the wiki-local owner before scanning. Conflicting
 local and legacy policies fail closed. Accepted wiki-local keys are
 `auto_ingest`, `a5_fanout_threshold`, and `a5_worker_timeout_sec`; migration
-preserves A5 keys while moving only `auto_ingest` ownership. The ignore globs
+preserves A5 keys while moving only `auto_ingest` ownership. The A5 keys are
+kept only so existing files stay valid; no host reads them. The ignore globs
 are vault-relative inside `auto_ingest`.
 
 Invalid wiki-local config is fail-closed before any legacy fallback:

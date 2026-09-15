@@ -151,13 +151,13 @@ test('portable npm test cannot discover the native installed-Codex release smoke
   assert.match(smoke, /windowsHide: true/);
 });
 
-test('1.10.1 release keeps package identity and bilingual changelogs exact', () => {
+test('1.11.0 release keeps package identity and bilingual changelogs exact', () => {
   const packageFiles = [
     '.claude-plugin/plugin.json',
     '.codex-plugin/plugin.json',
     'package.json',
   ];
-  for (const file of packageFiles) assert.equal(readJson(file).version, '1.10.1', file);
+  for (const file of packageFiles) assert.equal(readJson(file).version, '1.11.0', file);
 
   const releaseSection = (text, heading) => {
     const start = text.indexOf(heading);
@@ -169,6 +169,16 @@ test('1.10.1 release keeps package identity and bilingual changelogs exact', () 
   const changelogKo = readText('CHANGELOG.ko.md');
   const english1101 = releaseSection(changelog, '## [1.10.1] — 2026-08-26 (worker dispatch contract)');
   const korean1101 = releaseSection(changelogKo, '## [1.10.1] — 2026-08-26 (worker dispatch 계약)');
+  const english1110 = releaseSection(changelog, '## [1.11.0] — 2026-09-15 (main-caller ingest)');
+  const korean1110 = releaseSection(changelogKo, '## [1.11.0] — 2026-09-15 (main-caller ingest)');
+  assert.match(english1110, /`main-caller-sequential` route/);
+  assert.match(english1110, /URL source-origin prompt contract/);
+  assert.match(english1110, /no host reads them/);
+  assert.match(english1110, /distinct 1\.11\.0 installation identity/);
+  assert.match(korean1110, /`main-caller-sequential` route/);
+  assert.match(korean1110, /URL source-origin prompt contract/);
+  assert.match(korean1110, /어느 host도 이 값을 읽지 않습니다/);
+  assert.match(korean1110, /별도 1\.11\.0 설치 식별자/);
   assert.match(english1101, /effective `a5_fanout_threshold` and `a5_worker_timeout_sec`/);
   assert.match(english1101, /positive safe integers/);
   assert.match(english1101, /anchored input\/output contract/);

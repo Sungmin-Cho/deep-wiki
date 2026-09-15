@@ -1,5 +1,9 @@
 # V-0 caller-side resolution probe — runnable procedure
 
+> **Historical — do not run.** This is a v1.4.1 probe record. The ingest
+> subagents and `agents/*.md` files it names no longer exist: `/wiki-ingest`
+> now runs in the main caller on every host.
+
 **Plan reference:** `docs/superpowers/plans/2026-05-05-wiki-synthesizer-agent-split.md` §3.3 + §11 step 1 + §11.5 L1.
 
 **Branch:** `feature/v1.4.1-track-c`.

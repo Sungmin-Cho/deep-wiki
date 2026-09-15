@@ -12,7 +12,7 @@ cd deep-wiki
 ```
 
 Node 22 is required for development and CI. There are no runtime dependencies — the
-repo ships the plugin (skills, hooks, agents) plus CommonJS Node runtime and test
+repo ships the plugin (skills and hooks) plus CommonJS Node runtime and test
 scripts.
 
 ## Tests

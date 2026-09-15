@@ -41,7 +41,8 @@ The wiki-local `.wiki-meta/.config.json` owns `auto_ingest`. The global host YAM
 legacy policy into the wiki-local file before SessionStart scanning. Conflicting
 local and legacy policies fail closed. Accepted wiki-local keys are
 `auto_ingest`, `a5_fanout_threshold`, and `a5_worker_timeout_sec`; migration
-preserves A5 keys while moving only `auto_ingest` ownership. The ignore globs
+preserves A5 keys while moving only `auto_ingest` ownership. The A5 keys are
+kept only so existing files stay valid; no host reads them. The ignore globs
 are vault-relative inside `auto_ingest`. Non-regular file, symlink, duplicate
 key, invalid UTF-8, or >64 KiB wiki-local config state is `CONFIG_INVALID`.
 `CONFIG_CONFLICT` recovery for local-vs-legacy policy values is to make local

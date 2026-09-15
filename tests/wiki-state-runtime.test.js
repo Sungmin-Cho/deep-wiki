@@ -232,6 +232,47 @@ test('operation-specific manifest semantics reject eventless rebuild and mutatin
   }
 });
 
+test('a page merged from two sources is listed by exactly one source event', () => {
+  // The runtime rejects a merged page listed by two source events. Which
+  // contributor lists it is caller policy (/wiki-ingest §2), not enforced here.
+  const { applyCommit } = require(statePath);
+  const merged = (laterEventPages) => manifest({
+    pages: [{
+      file: 'topic.md', action: 'create', expected_sha256: null,
+      content: pageContent('Topic', ['source-a', 'source-b']),
+    }],
+    sources: [
+      { slug: 'source-a', content: 'origin: a.md\ntype: file\n' },
+      { slug: 'source-b', content: 'origin: b.md\ntype: file\n' },
+    ],
+    events: [
+      { event_id: EVENT_ID, ts: TS, action: 'ingest', source: 'source-a', pages_created: ['topic.md'], pages_updated: [] },
+      { event_id: '01JZ7P9Q6MD7S5PB8H4Y40HJ85', ts: TS, action: 'ingest', source: 'source-b', ...laterEventPages },
+    ],
+  });
+  for (const [name, pages] of [
+    ['listed again as created', { pages_created: ['topic.md'], pages_updated: [] }],
+    ['listed as updated by the later source', { pages_created: [], pages_updated: ['topic.md'] }],
+  ]) {
+    const root = fixture(`deep wiki merged split ${name} `);
+    const before = artifactSnapshot(root);
+    withLock(root, (token) => assert.throws(
+      () => applyCommit({ wikiRoot: root, token, manifest: merged(pages), now: new Date(TS) }),
+      (error) => error.code === 'MANIFEST_INVALID',
+      name,
+    ));
+    assert.deepEqual(artifactSnapshot(root), before, name);
+  }
+
+  const root = fixture('deep wiki merged single owner ');
+  withLock(root, (token) => applyCommit({
+    wikiRoot: root, token, manifest: merged({ pages_created: [], pages_updated: [] }), now: new Date(TS),
+  }));
+  const events = fs.readFileSync(path.join(root, 'log.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(events.map((event) => [event.source, event.pages_created, event.pages_updated]),
+    [['source-a', ['topic.md'], []], ['source-b', [], []]]);
+});
+
 test('scan-window bytes are validated during mutation-free preflight', () => {
   const { applyCommit } = require(statePath);
   const root = fixture('deep wiki scan preflight ');

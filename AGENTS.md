@@ -1,7 +1,8 @@
 # deep-wiki — Agent Guide
 
-LLM-managed markdown wiki for persistent knowledge accumulation, exposing skills,
-hooks and agents to both Claude Code and Codex.
+LLM-managed markdown wiki for persistent knowledge accumulation, exposing skills and
+hooks to both Claude Code and Codex. It ships no subagents: every skill runs in the
+host's main session.
 
 Read the version with `jq -r .version <plugin_root>/.claude-plugin/plugin.json` — anchored,
 because unanchored that command reads the *analysed* project's manifest, and every
@@ -19,13 +20,13 @@ being analysed.
 |---|---|---|
 | Wiki state — storage layout, page + provenance schema, invariants, lock and journal protocol, lifecycle `action` vocabulary | `skills/wiki-schema/`: `SKILL.md` (LLM-readable), `wiki-schema.yaml` (machine-readable), `references/storage-layout.md` (operation catalog) | `npm test` |
 | Per-skill runtime routes | `<plugin_root>/skills/wiki-*/SKILL.md`; every argv is allowlisted in `<plugin_root>/scripts/lib/executable-contract.js` | `npm run lint:commands` |
-| Subagent roles and tool grants | `agents/*.md` | `npm run lint:agents` |
+| No shipped subagents — `/wiki-ingest` runs main-caller-sequential on every host | no agents directory or manifest `agents` key; `<plugin_root>/skills/wiki-ingest/SKILL.md` §2 | `npm run lint:agents` |
 | SessionStart vault scan | `<plugin_root>/hooks/hooks.json` (15-second timeout) → `<plugin_root>/hooks/scripts/` | `npm run lint:hook-command` |
 | Emitted `index.json` envelope | `<plugin_root>/hooks/scripts/envelope.js` | `npm run validate-fixture` |
 
 `<plugin_root>/scripts/wiki-runtime.js` is the sole authority for configuration, lock ownership,
-versioning, journaled mutation, derived state and scan-window transitions. Skills and
-agents describe intent; they never mutate wiki state directly.
+versioning, journaled mutation, derived state and scan-window transitions. Skills
+describe intent; they never mutate wiki state directly.
 
 A new entry skill is auto-discovered on both hosts from `skills/<name>/SKILL.md` with
 `user-invocable: true` and `runtime_hosts: [claude, codex]` frontmatter. Register it in
