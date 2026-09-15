@@ -9,10 +9,11 @@
 // The prose check is lexical and cannot be complete, so a structural check backs
 // it: /wiki-ingest must keep one inert route record naming both hosts with
 // `child_agents: false`. Prose is read sentence by sentence, so an instruction
-// wrapped across lines is still one sentence. A sentence carrying a negation is
-// read as a prohibition and skipped — the cost is that an instruction hidden
-// behind a negation passes, the benefit is that the rules forbidding delegation
-// do not fail their own guard.
+// wrapped across lines is still one sentence, and each sentence is split into
+// clauses at commas and at and/but/so/instead/rather than/then/while. A clause
+// carrying a negation is read as a prohibition and skipped, so the rules that
+// forbid delegation do not fail their own guard, while a prohibition elsewhere
+// in the sentence does not shield a delegating clause.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -34,9 +35,11 @@ const MECHANISM_PATTERNS = [
 const NEGATION = /\b(?:never|not|no|nor|without|cannot)\b|n't\b/i;
 const DELEGATION_PATTERNS = [
   [/\b(?:sub-?agents?|child agents?|temporary agents?|(?:Agent|Task) tool)\b/i, 'agent reference'],
-  [/\b(?:launch\w*|spawn\w*|dispatch\w*|delegat\w*|fan\w*[- ]?out|hand\w*\s+off|invok\w*)\b.*\b(?:workers?|agents?|separate models?)\b/i,
+  // A runtime worker process is not a model; only the delegated kinds count.
+  [/\b(?:launch\w*|spawn\w*|dispatch\w*|delegat\w*|fan\w*[- ]?out|hand\w*\s+off|invok\w*)\b.*\b(?:workers?\b(?![- ](?:process|tree|thread))|agents?\b|separate models?\b)/i,
     'delegation instruction'],
 ];
+const CLAUSE_BREAK = /,|\b(?:and|but|so|instead|rather than|then|while)\b/i;
 
 // Each operative clause of the URL source-origin rule, matched against
 // whitespace-collapsed text so a clause may wrap.
@@ -131,10 +134,14 @@ function check(root = DEFAULT_ROOT) {
       }
     });
     for (const { line, sentence } of sentences(text)) {
-      if (NEGATION.test(sentence)) continue;
-      for (const [pattern, label] of DELEGATION_PATTERNS) {
-        if (pattern.test(sentence)) failures.push(`${relative}:${line}: ${label}`);
+      const labels = new Set();
+      for (const clause of sentence.split(CLAUSE_BREAK)) {
+        if (NEGATION.test(clause)) continue;
+        for (const [pattern, label] of DELEGATION_PATTERNS) {
+          if (pattern.test(clause)) labels.add(label);
+        }
       }
+      for (const label of labels) failures.push(`${relative}:${line}: ${label}`);
     }
   }
   const ingest = path.join(root, INGEST_SKILL);

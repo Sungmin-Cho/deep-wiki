@@ -233,8 +233,8 @@ test('operation-specific manifest semantics reject eventless rebuild and mutatin
 });
 
 test('a page merged from two sources is listed by exactly one source event', () => {
-  // /wiki-ingest §2 assigns a merged page to its first contributing source's
-  // event; this pins the runtime rule that makes any other split invalid.
+  // The runtime rejects a merged page listed by two source events. Which
+  // contributor lists it is caller policy (/wiki-ingest §2), not enforced here.
   const { applyCommit } = require(statePath);
   const merged = (laterEventPages) => manifest({
     pages: [{

@@ -71,7 +71,7 @@ source:
                      # source record when the third failure registered on one
                      # pending window commits `ingest-fail` (wiki-ingest §4).
                      # Its presence is the `partial-fail-recovery` repair
-                     # reason below, and inbox cleanup keeps its origin.
+                     # reason below.
 
 index:
   location: .wiki-meta/index.json
@@ -105,7 +105,7 @@ log:
       invariant: "Each page filename appears in pages_created at most once across the entire log — including within a single multi-source batch."
     pages_updated:
       rule: "File existed in pages/ before this manifest."
-    manifest_rule: "Within one manifest every page appears in exactly one event's list, matching its page action. A page merged from several sources is listed only by the event of its first contributing source in stable input order; the other contributors' events omit it."
+    manifest_rule: "Runtime rule: within one manifest every page appears in exactly one event's list, matching its page action. Caller convention (/wiki-ingest §2): a page merged from several sources is listed by the event of its first contributing source in stable input order, and the other contributors' events omit it."
   optional_fields:     # v1.4.0+ schema-additive — wiki-lint Step 6 LOG-INVARIANT scan unaffected
     pages_failed:
       applies_to: [ingest]

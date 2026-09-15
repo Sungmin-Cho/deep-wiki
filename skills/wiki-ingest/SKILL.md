@@ -100,10 +100,15 @@ update. A merged page belongs to the event of its first contributing source in
 stable input order; the other contributors keep their own events without that
 page and stay linked to it through its `sources` frontmatter and provenance.
 
-A source or page that cannot be analyzed, written, or validated fails only its
-own work: register it through the §4 failure path rather than committing a
-partial body. When a merged page fails, leave it out of every event and register
-each of its contributing sources.
+A source or page that cannot be analyzed, written, or validated fails its merge
+group: that source or page, every source connected to it through shared pages,
+directly or transitively, and every page those sources contribute to. Leave the
+whole group out of `pages`, `sources`, and `events` — a failed source committed
+with an event would be skipped as intact on the next run — and commit only the
+groups that validated. Register at most one failure per run on a pending window
+through §4, naming the first failed source in stable input order, and report
+every other failed source instead: the runtime counts registrations per window
+and commits `ingest-fail` on the third.
 
 When a batch holds more sources or pages than stay fully in view at once, split
 it into groups in stable input order and finish one group at a time — plan it,

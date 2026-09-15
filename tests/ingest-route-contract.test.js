@@ -111,6 +111,14 @@ test('the plugin ships no subagents and the guard rejects each way one could ret
       /CLAUDE\.md:1: agent reference/],
     ['agent tool reference', (write) => write('CLAUDE.md', 'Use the Agent tool to write each page body.\n'),
       /CLAUDE\.md:1: agent reference/],
+    ['delegation after a prohibition', (write) => write('AGENTS.md',
+      'Do not process pages inline and instead delegate them to child agents.\n'),
+      /AGENTS\.md:1: (?:agent reference|delegation instruction)/],
+    ['negation in a later clause', (write) => write('AGENTS.md', 'Spawn one subagent per source so no source is skipped.\n'),
+      /AGENTS\.md:1: agent reference/],
+    ['negation after a comma', (write) => write('AGENTS.md',
+      'Delegate each page body to a worker rather than the main caller, not to a hook.\n'),
+      /AGENTS\.md:1: delegation instruction/],
     ['missing route record', (write) => write('skills/wiki-ingest/SKILL.md', ingest.replace(/"ingest_route"/, '"route"')),
       /exactly one ingest_route record/],
     ['route record allowing child agents', (write) => write('skills/wiki-ingest/SKILL.md', withRoute('"child_agents":true')),
@@ -132,9 +140,15 @@ test('the plugin ships no subagents and the guard rejects each way one could ret
     assert.ok(failures.some((failure) => expected.test(failure)), `${label}: ${failures.join('; ')}`);
   }
 
-  // A rule that forbids delegation must not fail the guard that enforces it.
-  assert.deepEqual(fixture((write) => write('AGENTS.md',
-    'Never delegate page writing to a subagent.\nNo host launches a child agent.\n')), []);
+  // A rule that forbids delegation must not fail the guard that enforces it, and
+  // a runtime worker process is not a delegated model.
+  assert.deepEqual(fixture((write) => write('AGENTS.md', [
+    'Never delegate page writing to a subagent.',
+    'No host launches a child agent.',
+    '',
+    'The runtime spawns a worker process for the snapshot.',
+    '',
+  ].join('\n'))), []);
 });
 
 test('all five skills expose one exact deterministic route to both hosts', () => {
