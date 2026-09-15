@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-09-15 (main-caller ingest)
+
+### Changed
+
+- `/wiki-ingest` now runs in the main caller on Claude Code, as it already did on Codex. One host-neutral `main-caller-sequential` route analyzes each input in stable order, writes every page body with the full source and the current page on disk in view, and validates it before the next plan. Claude Code previously delegated this work to three subagents pinned to Sonnet, and the page writer saw only the excerpts serialized into its payload, which made large ingests slow and could drop source context.
+- The grounding rules and the URL source-origin prompt contract those agents carried now live in `/wiki-ingest` §3, together with the rule that an update is written from the complete page read from disk.
+- `a5_fanout_threshold` and `a5_worker_timeout_sec` stay accepted wiki-local keys and `config resolve --json` still reports them, so existing `.wiki-meta/.config.json` files remain valid, but no host reads them.
+- No runtime, journal, manifest, or wiki state format changed; pages, provenance, and lifecycle events keep their existing contract.
+- These changes ship under a distinct 1.11.0 installation identity across both plugin manifests and package metadata.
+
+### Removed
+
+- All four `agents/*.md` files: `wiki-synthesizer-analysis`, `wiki-synthesizer-worker`, `wiki-page-writer`, and the dormant `wiki-synthesizer-inline`. A caller that dispatched a `deep-wiki:wiki-*` agent directly must run `/wiki-ingest` instead. `npm run lint:agents` now fails if an agent file, a manifest `agents` key, or a delegation instruction reappears.
+
 ## [1.10.1] — 2026-08-26 (worker dispatch contract)
 
 ### Fixed

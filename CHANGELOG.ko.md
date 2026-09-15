@@ -7,6 +7,20 @@ deep-wiki의 주요 변경사항을 기록합니다.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-09-15 (main-caller ingest)
+
+### 변경
+
+- `/wiki-ingest`가 Codex에서 이미 그랬던 것처럼 Claude Code에서도 main caller에서 실행됩니다. 호스트 공통 `main-caller-sequential` route 하나가 입력을 stable 순서로 하나씩 분석하고, 전체 소스와 디스크의 현재 페이지를 보면서 모든 페이지 본문을 작성하며, 다음 plan으로 넘어가기 전에 검증합니다. 이전에는 Claude Code가 이 작업을 Sonnet으로 고정된 subagent 세 개에 위임했고, page writer는 payload에 직렬화된 excerpt만 봤기 때문에 큰 ingest가 느리고 소스 맥락을 놓칠 수 있었습니다.
+- 그 에이전트들이 담고 있던 grounding 규칙과 URL source-origin prompt contract는 이제 `/wiki-ingest` §3에 있으며, update는 디스크에서 읽은 전체 페이지를 기준으로 작성한다는 규칙도 함께 들어 있습니다.
+- `a5_fanout_threshold`와 `a5_worker_timeout_sec`는 계속 허용되는 wiki-local key이고 `config resolve --json`도 계속 보고하므로 기존 `.wiki-meta/.config.json` 파일은 유효하지만, 어느 host도 이 값을 읽지 않습니다.
+- runtime, journal, manifest, wiki state 형식은 바뀌지 않았으며 page, provenance, lifecycle event는 기존 계약을 유지합니다.
+- 이 변경은 두 plugin manifest와 package metadata 모두에서 별도 1.11.0 설치 식별자로 배포됩니다.
+
+### 제거
+
+- `agents/*.md` 네 파일을 모두 제거했습니다: `wiki-synthesizer-analysis`, `wiki-synthesizer-worker`, `wiki-page-writer`, dormant `wiki-synthesizer-inline`. `deep-wiki:wiki-*` 에이전트를 직접 dispatch하던 호출자는 `/wiki-ingest`를 실행해야 합니다. `npm run lint:agents`는 이제 agent 파일, manifest `agents` key, 위임 지시가 다시 나타나면 실패합니다.
+
 ## [1.10.1] — 2026-08-26 (worker dispatch 계약)
 
 ### 수정

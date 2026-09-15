@@ -159,7 +159,7 @@ auto_ingest.ignore_globs: ["**/archive-*.md"]
 }
 ```
 
-프로덕션 ownership: wiki-local `.wiki-meta/.config.json`가 `auto_ingest`를 소유합니다. 허용되는 wiki-local key는 `auto_ingest`, `a5_fanout_threshold`, `a5_worker_timeout_sec`입니다. migration은 A5 key를 보존하면서 `auto_ingest` ownership만 이동합니다. `ignore_globs`의 ignore glob은 vault-relative이므로 `notes/private/**`는 wiki metadata directory가 아니라 vault root 기준으로 매칭됩니다.
+프로덕션 ownership: wiki-local `.wiki-meta/.config.json`가 `auto_ingest`를 소유합니다. 허용되는 wiki-local key는 `auto_ingest`, `a5_fanout_threshold`, `a5_worker_timeout_sec`입니다. migration은 A5 key를 보존하면서 `auto_ingest` ownership만 이동합니다. A5 key는 기존 파일이 계속 유효하도록 남겨 둔 것이며, `/wiki-ingest`는 모든 host에서 main caller로 실행되어 둘 다 읽지 않습니다. `ignore_globs`의 ignore glob은 vault-relative이므로 `notes/private/**`는 wiki metadata directory가 아니라 vault root 기준으로 매칭됩니다.
 
 global host YAML `auto_ingest`는 bootstrap/legacy alias일 뿐이며, `/wiki-setup`과 SessionStart가 동등한 legacy policy를 스캔 전에 wiki-local 파일로 migration합니다. 유지된 global alias는 제거 전까지 계속 resolve됩니다. legacy YAML은 `policy_source=wiki_local_migrated` 이후에만 제거하고, 다시 resolve해 `policy_source=wiki_local` 확인 후 local owner만 신뢰하세요. 충돌하는 local 및 legacy policy는 fail closed합니다. `CONFIG_CONFLICT` recovery for local-vs-legacy policy values는 local과 legacy 값을 일치시키거나 policy block 하나를 삭제하는 것입니다. 이 작업은 모든 host를 중지한 상태에서 수행하세요. `CONFIG_CONFLICT candidates=...`는 cross-host candidate YAML file divergence를 뜻하므로, 이름이 보고된 host YAML 파일들을 모든 host가 중지된 상태에서 reconcile하세요. 대표 invalid local config shape, including non-regular file, symlink, duplicate key, invalid UTF-8, 또는 >64 KiB는 `CONFIG_INVALID`로 fail closed하며, 다른 malformed 또는 unsupported wiki-local key도 fail closed합니다.
 

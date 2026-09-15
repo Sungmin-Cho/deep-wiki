@@ -63,9 +63,9 @@ const { execFileSync } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
 const ALWAYS_LOADED = ['AGENTS.md', 'CLAUDE.md'];
 
-// The scan set: every `.md` under skills/ and agents/, plus the two always-loaded
-// guides. `agents/*.md` are instruction surfaces under the same rule — a subagent
-// definition is prose a host hands to a model. `CLAUDE.md` is a thin `@AGENTS.md`
+// The scan set: every `.md` under skills/, plus the two always-loaded guides. The
+// plugin ships no `agents/` tree, and `npm run lint:agents` fails if one returns —
+// that is what keeps this walk complete. `CLAUDE.md` is a thin `@AGENTS.md`
 // wrapper here, which is a reason to scan it and not a reason to skip it: it is
 // loaded on every Claude Code session, so anything it names is an instruction the
 // host has already accepted.
@@ -79,7 +79,6 @@ function markdownFiles() {
     }
   };
   walk(path.join(ROOT, 'skills'));
-  walk(path.join(ROOT, 'agents'));
   // `ALWAYS_LOADED` is asserted to be in the scan set by its own test, so
   // dropping it here fails loudly instead of silently shrinking coverage.
   for (const doc of ALWAYS_LOADED) {
@@ -89,7 +88,7 @@ function markdownFiles() {
   return out;
 }
 
-// Every `.md` under skills/ and agents/ — the documents an attacker would want to
+// Every `.md` under skills/ — the documents an attacker would want to
 // shadow. A bare Read(`storage-layout.md`) names one of these with no basis at
 // all, so it resolves against cwd, which is the target workspace.
 const PLUGIN_DOCS = (() => {
@@ -102,7 +101,6 @@ const PLUGIN_DOCS = (() => {
     }
   };
   walk(path.join(ROOT, 'skills'));
-  walk(path.join(ROOT, 'agents'));
   return names;
 })();
 
@@ -636,13 +634,11 @@ test('the always-loaded agent guides are in the scan set', () => {
     assert.ok(fs.existsSync(path.join(ROOT, doc)), `${doc} must exist to be scanned`);
     assert.ok(scanned.includes(doc), `${doc} must be in the shadow-guard scan set`);
   }
-  // Both instruction trees must actually be walked. Asserting only that the set is
-  // non-empty would pass with `agents/` dropped, and those four documents carry
-  // tool grants — they are the surface a host hands straight to a model.
-  for (const tree of ['skills/', 'agents/']) {
-    assert.ok(scanned.some((k) => k.startsWith(tree)),
-      `${tree} must be in the shadow-guard scan set`);
-  }
+  // The skills tree must actually be walked. Asserting only that the set is
+  // non-empty would pass with it dropped, because the two root guides keep the set
+  // full on their own.
+  assert.ok(scanned.some((k) => k.startsWith('skills/')),
+    'skills/ must be in the shadow-guard scan set');
   const nested = scanned.find((k) => k.includes('/'));
   assert.ok(nested,
     'the scan set must hold a nested document, or the next assertion proves nothing');
@@ -724,16 +720,6 @@ test('each instruction form is the only rule that can see its own case', () => {
   // it an instruction rather than prose, so an unshipped basename must stay silent.
   assert.deepEqual(shadowableTokens('node not-a-shipped-script.js --json'), [],
     'an interpreter on a basename the plugin does not ship is prose');
-
-  // BARE_BASENAME's document set spans agents/ as well as skills/, and only this
-  // pins it: every other agents/ assertion is about the SCAN set, so dropping the
-  // agents walk from PLUGIN_DOCS alone turned nothing red. An agent definition is
-  // as shadowable as a skill — `Read(\`wiki-page-writer.md\`)` resolves straight
-  // against cwd.
-  const agentDoc = [...PLUGIN_DOCS].find((n) => fs.existsSync(path.join(ROOT, 'agents', n)));
-  assert.ok(agentDoc, 'PLUGIN_DOCS must span agents/, or the next assertion proves nothing');
-  assert.deepEqual(shadowableTokens(`Read(\`${agentDoc}\`)`).map((h) => h.form), ['bare-basename'],
-    `an agent document basename must be flagged, and by that rule alone: ${agentDoc}`);
 });
 
 test('a JS module load is refused in every spelling, anchored or not', () => {

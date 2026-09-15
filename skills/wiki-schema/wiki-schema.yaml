@@ -146,13 +146,13 @@ a5_fanout:             # v1.4.0+: optional <wiki>/.wiki-meta/.config.json knobs
       minimum: 1
       maximum: 9007199254740991
       default: 3
-      semantics: "Claude Code may dispatch qualified wiki-page-writer workers when len(page_plan) reaches this value. Codex 1.8.0 always processes every page plan sequentially in its main caller."
+      semantics: "Accepted for compatibility only; no host reads it. /wiki-ingest runs main-caller-sequential on every host."
     a5_worker_timeout_sec:
       type: integer
       minimum: 1
       maximum: 9007199254740991
       default: 90
-      semantics: "Per-worker wall-clock budget. Claude discards a late result and replays only the affected work item through the main-caller-sequential route."
+      semantics: "Accepted for compatibility only; no host reads it. /wiki-ingest runs main-caller-sequential on every host."
 
 failure_state:         # v1.3.0+: partial-fail retry artifacts under .wiki-meta/
   failed_sources_manifest:

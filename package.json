@@ -1,6 +1,6 @@
 {
   "name": "deep-wiki",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "LLM-managed markdown wiki — 5 cross-platform skills with a portable Node 22 runtime for Claude Code and Codex.",
   "author": {
     "name": "Sungmin-Cho"
@@ -22,7 +22,7 @@
     "validate-plugin": "node --test tests/plugin-contract.test.js",
     "lint:hook-command": "node scripts/lib/executable-contract.js --check-hooks",
     "lint:commands": "node scripts/lib/executable-contract.js --check",
-    "lint:agents": "node scripts/lint-agent-tools.js",
+    "lint:agents": "node scripts/lint-agents.js",
     "test:codex-windows-release": "node --test --test-concurrency=1 tests/release/codex-plugin-hook-smoke.release.js"
   }
 }
