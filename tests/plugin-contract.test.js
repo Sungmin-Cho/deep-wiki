@@ -151,13 +151,13 @@ test('portable npm test cannot discover the native installed-Codex release smoke
   assert.match(smoke, /windowsHide: true/);
 });
 
-test('1.11.0 release keeps package identity and bilingual changelogs exact', () => {
+test('1.12.0 release keeps package identity and bilingual changelogs exact', () => {
   const packageFiles = [
     '.claude-plugin/plugin.json',
     '.codex-plugin/plugin.json',
     'package.json',
   ];
-  for (const file of packageFiles) assert.equal(readJson(file).version, '1.11.0', file);
+  for (const file of packageFiles) assert.equal(readJson(file).version, '1.12.0', file);
 
   const releaseSection = (text, heading) => {
     const start = text.indexOf(heading);
@@ -169,6 +169,13 @@ test('1.11.0 release keeps package identity and bilingual changelogs exact', () 
   const changelogKo = readText('CHANGELOG.ko.md');
   const english1101 = releaseSection(changelog, '## [1.10.1] — 2026-08-26 (worker dispatch contract)');
   const korean1101 = releaseSection(changelogKo, '## [1.10.1] — 2026-08-26 (worker dispatch 계약)');
+  const english1120 = releaseSection(changelog, '## [1.12.0] — 2026-09-25 (blocked prune diagnostics)');
+  const korean1120 = releaseSection(changelogKo, '## [1.12.0] — 2026-09-25 (막힌 prune 진단)');
+  assert.match(english1120, /`blocked_count`/);
+  assert.match(english1120, /never changes what may be deleted/);
+  assert.match(english1120, /distinct 1\.12\.0 installation identity/);
+  assert.match(korean1120, /`blocked_count`/);
+  assert.match(korean1120, /별도 1\.12\.0 설치 식별자/);
   const english1110 = releaseSection(changelog, '## [1.11.0] — 2026-09-15 (main-caller ingest)');
   const korean1110 = releaseSection(changelogKo, '## [1.11.0] — 2026-09-15 (main-caller ingest)');
   assert.match(english1110, /`main-caller-sequential` route/);

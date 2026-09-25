@@ -1,6 +1,6 @@
 {
   "name": "deep-wiki",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "LLM-managed markdown wiki for persistent knowledge accumulation — based on Karpathy's LLM Wiki philosophy. 5 skill-based entry surfaces (cross-platform: Claude Code slash + Codex/Copilot CLI/Gemini CLI/SDK via Skill()).",
   "author": {
     "name": "sungmin"

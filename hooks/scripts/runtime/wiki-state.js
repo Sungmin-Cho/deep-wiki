@@ -379,9 +379,19 @@ function inspectTransactions(root, allowedOperationId = null, deadline = operati
         error.wikiRoot = root;
         throw error;
       }
+      const pruneNames = entries
+        // Same classification as the loop above, so an unknown-type directory still counts.
+        .filter((candidate) => candidate.name.startsWith('.prune-') && (candidate.isDirectory()
+          || (!candidate.isSymbolicLink() && !candidate.isFile() && !candidate.isBlockDevice()
+            && !candidate.isCharacterDevice() && !candidate.isFIFO() && !candidate.isSocket()
+            && resolveUnknownDirent(directory, candidate).kind === 'directory')))
+        .map((candidate) => candidate.name)
+        .sort();
       throw stateError(
         'TRANSACTION_RECOVERY_REQUIRED',
-        'a terminal scan-window prune quarantine requires recovery; run wiki-lint --fix, and if it makes no progress stop all hosts and follow the stopped-host procedure',
+        'a terminal scan-window prune quarantine requires recovery '
+          + `(${pruneNames.length} .prune-* entries; first: ${pruneNames[0] || entry.name}); `
+          + 'run wiki-lint --fix, and if it makes no progress stop all hosts and follow the stopped-host procedure',
       );
     }
     const livePressure = inspectDirectoryPressure(transaction, {
@@ -1686,6 +1696,20 @@ function transactionStoreJunkNames(root) {
   return entries.filter((entry) => isReclaimableJunkEntry(entry, transactions)).map((entry) => entry.name);
 }
 
+// The four blocked-residue fields describe the last pass that walked the store. `null` counts mean
+// that pass produced no observation, which is different from observing zero (issue #60).
+function pruneObservation(pass) {
+  if (pass && Array.isArray(pass.blocked)) {
+    return {
+      blocked: pass.blocked,
+      blocked_count: pass.blocked_count,
+      blocked_truncated: pass.blocked_truncated,
+      deferred_count: pass.deferred_count,
+    };
+  }
+  return { blocked: [], blocked_count: null, blocked_truncated: false, deferred_count: null };
+}
+
 function fixWiki(options = {}) {
   const deadline = operationDeadline(options);
   const root = physicalRoot(options.wikiRoot);
@@ -1732,7 +1756,9 @@ function fixWiki(options = {}) {
       }
       return scanWindow.pruneScanWindowTransactions(request);
     };
-    let recovery = { processed: 0, removed: [], complete: true };
+    let recovery = {
+      processed: 0, removed: [], complete: true, ...pruneObservation(null),
+    };
     let before;
     try {
       before = inspectWiki({ wikiRoot: root, deadline });
@@ -1816,7 +1842,15 @@ function fixWiki(options = {}) {
           }
           throw wrapped;
         }
-        if (recovery.processed === 0 && recovery.complete === true) throw recoveryInitial;
+        if (recovery.processed === 0 && recovery.complete === true) {
+          const wrapped = stateError(
+            recoveryInitial.code || 'FILESYSTEM',
+            `scan-window prune residue recovery made no progress: ${recoveryInitial.message}`,
+            recoveryInitial,
+          );
+          wrapped.terminal_prune = recovery;
+          throw wrapped;
+        }
         if (recovery.processed === 0 && recovery.complete === false) {
           const wrapped = stateError(
             recoveryInitial.code || 'FILESYSTEM',
@@ -1964,6 +1998,7 @@ function fixWiki(options = {}) {
           removed: [...recovery.removed],
           complete: false,
           skipped_oversized: skippedAfter,
+          ...pruneObservation(null),
         };
       }
       else {
@@ -1972,6 +2007,7 @@ function fixWiki(options = {}) {
           removed: recovery.removed.concat(tailError.terminal_prune.removed),
           complete: false,
           skipped_oversized: skippedAfter,
+          ...pruneObservation(tailError.terminal_prune),
         };
       }
       throw wrapped;
@@ -1994,6 +2030,7 @@ function fixWiki(options = {}) {
       removed: recovery.removed.concat(tail.removed),
       complete: recovery.complete && tail.complete,
       skipped_oversized: promotion.skipped_oversized,
+      ...pruneObservation(tail),
     };
     if (suppressEnsurePrune) {
       terminalPrune.suppressed_reason = 'initial-invalid-scan-marker';

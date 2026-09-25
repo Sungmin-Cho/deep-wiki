@@ -24,6 +24,11 @@ runtime_authority:
     terminal_prune_scope: validated-cleaned-scan-window-only
     terminal_prune_bounded: true
     terminal_prune_completion_field: complete
+    terminal_prune_blocked_field: blocked
+    terminal_prune_blocked_count_field: blocked_count
+    terminal_prune_blocked_truncated_field: blocked_truncated
+    terminal_prune_deferred_count_field: deferred_count
+    terminal_prune_blocked_policy: "Observation only: blocked lists at most 32 store entries whose last outcome in the pass was a refusal (name, operation_id, stage, reason, code, canonical); blocked_count is exact for the pass and a lower bound when complete is false; deferred_count counts prune-family residue the caller's kind, age, or exclusion policy did not select; null counts mean the pass produced no observation. None of these fields changes deletion authority."
     terminal_prune_callers: ["scan-window ensure", "wiki-lint --fix", "transaction prune"]
     terminal_prune_ordinary_age_policy: "Only ordinary cleaned directories old enough for the caller policy are selected."
     terminal_prune_residue_policy: "Authenticated residue from an already-started prune may bypass the ordinary age gate, but authenticated already-started ensure residue remains protected when either marker was initially invalid; ordinary directories remain excluded in resumable-only mode."
