@@ -380,7 +380,11 @@ function inspectTransactions(root, allowedOperationId = null, deadline = operati
         throw error;
       }
       const pruneNames = entries
-        .filter((candidate) => candidate.name.startsWith('.prune-') && candidate.isDirectory())
+        // Same classification as the loop above, so an unknown-type directory still counts.
+        .filter((candidate) => candidate.name.startsWith('.prune-') && (candidate.isDirectory()
+          || (!candidate.isSymbolicLink() && !candidate.isFile() && !candidate.isBlockDevice()
+            && !candidate.isCharacterDevice() && !candidate.isFIFO() && !candidate.isSocket()
+            && resolveUnknownDirent(directory, candidate).kind === 'directory')))
         .map((candidate) => candidate.name)
         .sort();
       throw stateError(

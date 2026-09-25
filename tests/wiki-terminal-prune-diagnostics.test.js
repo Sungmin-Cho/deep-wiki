@@ -670,14 +670,34 @@ test('a filesystem failure after a completed removal is not reported as blocked'
   }
 });
 
-test('inspection counts only prune directories', () => {
+test('inspection counts prune directories, including unknown-type ones, and nothing else', (t) => {
   const root = wiki();
   const store = transactionsOf(root);
-  fs.mkdirSync(path.join(store, '.prune-5-bbbbb-debris'));
-  fs.writeFileSync(path.join(store, '.prune-5-aaaaa-debris'), 'not a quarantine\n');
+  fs.mkdirSync(path.join(store, '.prune-5-zzzzz-debris'));
+  fs.mkdirSync(path.join(store, '.prune-5-aaaaa-debris'));
+  fs.mkdirSync(path.join(store, '.prune-5-mmmmm-debris'));
+  const original = fs.readdirSync;
+  t.after(() => { fs.readdirSync = original; });
+  // Directory order puts a known directory first; the other two arrive with an unknown type, as
+  // some filesystems report them.
+  fs.readdirSync = function readdirSync(target, options) {
+    const result = original.call(fs, target, options);
+    if (path.resolve(String(target)) !== store || !options || !options.withFileTypes) return result;
+    const unknown = (entry) => ({
+      name: entry.name,
+      isDirectory: () => false,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isFIFO: () => false,
+      isSocket: () => false,
+    });
+    const known = result.find((entry) => entry.name === '.prune-5-zzzzz-debris');
+    return [known, ...result.filter((entry) => entry !== known).map(unknown)];
+  };
   assert.throws(() => inspectWiki({ wikiRoot: root }), (error) =>
-    error.message.includes('(1 .prune-* entries; first: .prune-5-bbbbb-debris)')
-    || error.message.includes('non-directory entry'));
+    error.message.includes('(3 .prune-* entries; first: .prune-5-aaaaa-debris)'));
 });
 
 test('a transaction prune caller holding the lock is told to rerun or release it', () => {
