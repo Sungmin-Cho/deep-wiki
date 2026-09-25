@@ -744,12 +744,14 @@ function physicalWikiRootForHint(value) {
 
 // Turns a prune observation into a reviewable, preserve-first plan (issue #60). The plan is only
 // printed: every command is an existing `transaction quarantine`, which moves and never deletes.
-function blockedPruneHint(observation, wikiRoot) {
+function blockedPruneHint(observation, wikiRoot, options = {}) {
+  const heldLock = options.command === 'transaction prune';
   if (!observation || !Array.isArray(observation.blocked) || !wikiRoot
       || !(observation.blocked_count > 0)) return null;
   if (observation.processed > 0) {
-    return 'Progress was made on this pass; rerun lint fix. Preserve residue only if the same '
-      + 'entries stay blocked on a pass with no progress.';
+    return `Progress was made on this pass; rerun ${heldLock
+      ? 'transaction prune under the same lock'
+      : 'lint fix'}. Preserve residue only if the same entries stay blocked on a pass with no progress.`;
   }
   const { isIsolatableStoreName } = require(path.join(runtimeRoot, 'transaction-debris.js'));
   const isolatable = (name) => isIsolatableStoreName(name, scanWindow.operationIdFromPruneName);
@@ -792,7 +794,9 @@ function blockedPruneHint(observation, wikiRoot) {
     }
   }
   const lines = [
-    'Blocked terminal prune residue (observed at the end of this pass). Stop all hosts, review '
+    (heldLock ? 'Release the lock passed as --lock-token first: these commands take the lock '
+      + 'themselves. ' : '')
+      + 'Blocked terminal prune residue (observed at the end of this pass). Stop all hosts, review '
       + 'these entries, then preserve them one command at a time in this order. Stop at the first '
       + 'result that is not "quarantined" and rerun lint fix before continuing. Nothing is '
       + 'deleted; bundles go to .wiki-meta/.quarantine/.',
@@ -810,8 +814,8 @@ function blockedPruneHint(observation, wikiRoot) {
   return lines.join('\n');
 }
 
-function writeBlockedPruneHint(observation, wikiRoot) {
-  const hint = blockedPruneHint(observation, wikiRoot);
+function writeBlockedPruneHint(observation, wikiRoot, options) {
+  const hint = blockedPruneHint(observation, wikiRoot, options);
   if (hint) process.stderr.write(`${hint}\n`);
 }
 
@@ -867,7 +871,10 @@ function runTransaction(argv) {
         deadline,
       });
     } catch (error) {
-      if (error && typeof error === 'object') error.hintWikiRoot = hintRoot;
+      if (error && typeof error === 'object') {
+        error.hintWikiRoot = hintRoot;
+        error.hintCommand = 'transaction prune';
+      }
       throw error;
     }
     const skipped = pruneResult.skipped_oversized || [];
@@ -887,7 +894,7 @@ function runTransaction(argv) {
       promotion_failures: promotion.failures,
       telemetry_error: promotion.telemetry_error || undefined,
     });
-    writeBlockedPruneHint(pruneResult, hintRoot);
+    writeBlockedPruneHint(pruneResult, hintRoot, { command: 'transaction prune' });
     return;
   }
   if (command === 'recover') {
@@ -1012,7 +1019,7 @@ function exitCode(error) {
 function reportMainError(error) {
   emitError(error);
   if (error && typeof error === 'object') {
-    writeBlockedPruneHint(error.terminal_prune, error.hintWikiRoot);
+    writeBlockedPruneHint(error.terminal_prune, error.hintWikiRoot, { command: error.hintCommand });
   }
   if (error && error.code === 'TRANSACTION_OVERSIZED') {
     process.stderr.write(`${oversizedHint(error)}\n`);

@@ -15,6 +15,7 @@ const { acquireLock, releaseLock } = require('../hooks/scripts/runtime/lock.js')
 const { fixWiki, inspectWiki } = require('../hooks/scripts/runtime/wiki-state.js');
 const {
   addQuarantineGeneration,
+  stopPruneAt,
   createCompletedEnsures,
   createStalledQuarantine,
   createWikiRoot,
@@ -506,7 +507,7 @@ test('T2 CLI a progressing transaction prune pass asks for a rerun, the next pas
     const first = run();
     assert.equal(first.status, 0, first.stderr);
     assert.equal(JSON.parse(first.stdout).blocked_count, 1);
-    assert.match(first.stderr, /Progress was made on this pass; rerun lint fix/);
+    assert.match(first.stderr, /Progress was made on this pass; rerun transaction prune under the same lock/);
     const second = run();
     assert.equal(second.status, 0, second.stderr);
     assert.equal(JSON.parse(second.stdout).blocked_count, 0);
@@ -634,4 +635,60 @@ test('public contracts describe the blocked report and the preserve-first plan',
   assert.match(lint, /canonical operation directory\s+first/);
   assert.match(storage, /only `quarantine\.meta\.json`/);
   assert.match(machine, /never changes deletion authority|None of these fields changes deletion authority/);
+});
+
+test('a filesystem failure after a completed removal is not reported as blocked', async (t) => {
+  const fsFailure = () => Object.assign(new Error('parent lstat failed'), { code: 'SCAN_WINDOW_FILESYSTEM' });
+  const cases = [
+    { label: 'ordinary cleaned transaction', stop: null, boundary: 'after-final-canonical-reservation-unlink' },
+    { label: 'journal-bearing quarantine', stop: 'before-backup-destination-link', boundary: 'after-final-canonical-reservation-unlink' },
+    { label: 'empty quarantine', stop: 'before-quarantine-rmdir', boundary: 'after-empty-quarantine-reservation-unlink' },
+    { label: 'canonical reservation only', stop: 'before-final-canonical-reservation-unlink', boundary: 'after-canonical-reservation-only-unlink' },
+  ];
+  for (const item of cases) {
+    await t.test(item.label, () => {
+      const root = wiki();
+      const createdId = productionEnsureId(`${root}:pc-created`);
+      const operationId = productionEnsureId(`${root}:pc-preserved`);
+      const journals = createCompletedEnsures(root, [
+        { operationId: createdId, proposed: '2026-07-11T01:00:00Z' },
+        { operationId, proposed: '2026-07-11T02:00:00Z' },
+      ]);
+      const now = repairClockFromJournal(journals.map((entry) => entry.path));
+      if (item.stop) stopPruneAt(root, operationId, item.stop, now);
+      const result = prune(root, now, {
+        resumableOnly: item.stop !== null && item.stop !== 'before-final-canonical-reservation-unlink',
+        faultInjector(boundary, context) {
+          if (boundary === item.boundary && context?.operationId === operationId) throw fsFailure();
+        },
+      });
+      assert.deepEqual(result.removed, [operationId]);
+      assert.equal(result.blocked_count, 0);
+      assert.equal(fs.existsSync(path.join(transactionsOf(root), operationId)), false);
+      assert.deepEqual(quarantinesFor(root, operationId), []);
+    });
+  }
+});
+
+test('inspection counts only prune directories', () => {
+  const root = wiki();
+  const store = transactionsOf(root);
+  fs.mkdirSync(path.join(store, '.prune-5-bbbbb-debris'));
+  fs.writeFileSync(path.join(store, '.prune-5-aaaaa-debris'), 'not a quarantine\n');
+  assert.throws(() => inspectWiki({ wikiRoot: root }), (error) =>
+    error.message.includes('(1 .prune-* entries; first: .prune-5-bbbbb-debris)')
+    || error.message.includes('non-directory entry'));
+});
+
+test('a transaction prune caller holding the lock is told to rerun or release it', () => {
+  const progress = wikiRuntime.blockedPruneHint(observation(
+    [blockedEntry(pruneName(ID_A), ID_A, 'absent')],
+    { processed: 1 },
+  ), '/tmp/root', { command: 'transaction prune' });
+  assert.match(progress, /rerun transaction prune under the same lock/);
+  const plan = wikiRuntime.blockedPruneHint(observation(
+    [blockedEntry(pruneName(ID_A), ID_A, 'absent')],
+  ), '/tmp/root', { command: 'transaction prune' });
+  assert.match(plan, /^Release the lock passed as --lock-token first/);
+  assert.equal(quarantineLines(plan).length, 1);
 });

@@ -380,7 +380,7 @@ function inspectTransactions(root, allowedOperationId = null, deadline = operati
         throw error;
       }
       const pruneNames = entries
-        .filter((candidate) => candidate.name.startsWith('.prune-') && !candidate.isSymbolicLink())
+        .filter((candidate) => candidate.name.startsWith('.prune-') && candidate.isDirectory())
         .map((candidate) => candidate.name)
         .sort();
       throw stateError(

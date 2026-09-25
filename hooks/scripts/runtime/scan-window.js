@@ -114,6 +114,8 @@ function withPruneBlock(error, cursor, fallbackReason) {
     code: innermostCode(error),
   };
   if (cursor.residue) error.prune_name = cursor.residue;
+  // A failure after this attempt's final unlink reports a completed removal, not a refusal.
+  if (cursor.committed === true) error.prune_committed = true;
   return error;
 }
 
@@ -1060,6 +1062,7 @@ function defaultJournalAdapter(wikiRoot, operationId, nestedJunkContext = null) 
     assertPruneBudget();
     assertEnsureBoundary('before-final-canonical-reservation-unlink');
     fs.unlinkSync(locations.transaction);
+    cursor.committed = true;
     if (typeof onCommitted === 'function') onCommitted();
     assertTransactionsOwner();
   };
@@ -1133,6 +1136,7 @@ function defaultJournalAdapter(wikiRoot, operationId, nestedJunkContext = null) 
     assertPruneBudget();
     assertEnsureBoundary('before-empty-quarantine-reservation-unlink');
     fs.unlinkSync(locations.transaction);
+    cursor.committed = true;
     if (typeof onCommitted === 'function') onCommitted();
     assertTransactionsOwner();
   };
@@ -2385,6 +2389,7 @@ function pruneScanWindowTransactions(options = {}) {
         }
         throwWithTerminalPrune(error);
       }
+      let reservationCommitted = false;
       try {
         assertRegularFileIdentity(reservation, reservationIdentity);
         const currentBytes = fs.readFileSync(reservation);
@@ -2400,6 +2405,7 @@ function pruneScanWindowTransactions(options = {}) {
           'before-canonical-reservation-only-unlink',
         );
         fs.unlinkSync(reservation);
+        reservationCommitted = true;
         recordCommittedPrune(
           operationId,
           'after-canonical-reservation-only-unlink',
@@ -2414,7 +2420,7 @@ function pruneScanWindowTransactions(options = {}) {
         if (error.code === 'ENOENT'
             || error.code === 'TRANSACTION_RECOVERY_REQUIRED'
             || error.code === 'SCAN_WINDOW_FILESYSTEM') {
-          if (innermostCode(error) !== 'ENOENT') {
+          if (!reservationCommitted && innermostCode(error) !== 'ENOENT') {
             recordBlocked(entry.name, operationId, blockFrom(error, 'reservation-only'));
           }
           continue;
@@ -2567,6 +2573,7 @@ function pruneScanWindowTransactions(options = {}) {
             }
             throwIfEnsureProtected(error);
             if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+              if (error.prune_committed) continue;
               const block = blockFrom(error, 'empty-quarantine');
               const name = error.prune_name || entry.name;
               recordBlocked(name, name === operationId ? operationId : embeddedId, block);
@@ -2759,6 +2766,7 @@ function pruneScanWindowTransactions(options = {}) {
         }
         throwIfEnsureProtected(error);
         if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+          if (error.prune_committed) continue;
           const name = error.prune_name || entry.name;
           recordBlocked(
             name,
@@ -2877,6 +2885,7 @@ function pruneScanWindowTransactions(options = {}) {
       }
       throwIfEnsureProtected(error);
       if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+        if (error.prune_committed) continue;
         const name = error.prune_name || entry.name;
         recordBlocked(
           name,
