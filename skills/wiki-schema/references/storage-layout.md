@@ -27,7 +27,7 @@ WIKI_ROOT/
 Three different "quarantine" areas exist and must not be confused:
 
 1. Terminal-prune quarantine: `<store>/.prune-*` directories created by `pruneScanWindowTransactions`.
-2. Transaction quarantine bundles: `.wiki-meta/.quarantine/<stamp>-<pid>-<uuid>/` created automatically by SessionStart ensure, `wiki-lint --fix`, and `transaction prune` when they promote isolatable oversized store entries, and by the operator command `transaction quarantine`. Bundles are never auto-deleted. After the oversized tree is resolved, stop all hosts and dispose of the bundle directory manually; do not delete `.wiki-meta/.quarantine/` while any host is live.
+2. Transaction quarantine bundles: `.wiki-meta/.quarantine/<stamp>-<pid>-<uuid>/` created automatically by SessionStart ensure, `wiki-lint --fix`, and `transaction prune` when they promote isolatable oversized store entries, and by the operator command `transaction quarantine`. Bundles are never auto-deleted. After the oversized tree is resolved, stop all hosts and dispose of the bundle directory manually; do not delete `.wiki-meta/.quarantine/` while any host is live. A quarantine attempt that fails before its source rename leaves a bundle holding only `quarantine.meta.json`, and retrying the same source can add another each time; such bundles are also never auto-deleted and are disposed of the same way.
 3. Inbox quarantine: `.wiki-meta/.inbox/.quarantine/` used by `cleanupInbox`.
 
 The only file the engine creates under `.wiki-meta/.runtime` and intentionally leaves after ordinary cleanup is `scan-window-maintenance.json`. Authenticated partial setup may keep that directory when it contains exactly that marker or is empty.
@@ -136,6 +136,14 @@ does not claim that ambiguous entries were removed. Prune also reports
 `skipped_oversized` for store directories that D1 classified as oversized
 without entering them. `lint inspect` exposes the same class plus isolation
 history as informational `maintenance_residue` without flipping `ok`.
+Every prune result also carries `blocked` (at most 32 store entries whose last
+outcome in the pass was a refusal, with `stage`, `reason`, cause `code` and the
+observed `canonical` path kind), the exact `blocked_count`, `blocked_truncated`
+and `deferred_count` (prune-family residue the caller's kind, age or exclusion
+policy did not select). Counts are lower bounds while `complete` is `false`, and
+`null` in a `wiki-lint --fix` report means that pass produced no observation.
+Recording a refusal never reads the filesystem and never changes deletion
+authority.
 Ensure deletion additionally requires strict marker authority. Exact canonical
 UTC-Z plus LF, one-link regular non-symlink marker files are accepted; lstat
 `ENOENT` alone is absent. Either initial-invalid marker suppresses every

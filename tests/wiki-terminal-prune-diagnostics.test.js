@@ -618,3 +618,20 @@ test('T8 reinjected residue, locks and versions each keep their existing fail-cl
     assert.equal(fs.existsSync(path.join(root, '.wiki-meta', '.wiki-lock')), false);
   });
 });
+
+test('public contracts describe the blocked report and the preserve-first plan', () => {
+  const read = (relative) => fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
+  const lint = read('skills/wiki-lint/SKILL.md');
+  const storage = read('skills/wiki-schema/references/storage-layout.md');
+  const machine = read('skills/wiki-schema/wiki-schema.yaml');
+  for (const field of ['blocked', 'blocked_count', 'blocked_truncated', 'deferred_count']) {
+    assert.match(machine, new RegExp(`: ${field}\\n`));
+    assert.match(lint, new RegExp(`\`${field}\``));
+    assert.match(storage, new RegExp(`\`${field}\``));
+  }
+  assert.match(lint, /recovery made no progress/);
+  assert.match(lint, /never executed for you/);
+  assert.match(lint, /canonical operation directory\s+first/);
+  assert.match(storage, /only `quarantine\.meta\.json`/);
+  assert.match(machine, /never changes deletion authority|None of these fields changes deletion authority/);
+});

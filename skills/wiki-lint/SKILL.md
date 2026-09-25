@@ -102,6 +102,25 @@ recover` path or the stopped-host procedure instead of assuming scan-window
 residue. A terminal scan-window prune quarantine blocks snapshot or commit
 inspection until this repair path completes it.
 
+`terminal_prune` also reports what the last pass over the store could not
+recover: `blocked` lists up to 32 store entries whose last outcome was a
+refusal, each with `name`, `operation_id`, `stage`, `reason`, `code` and the
+observed `canonical` path kind; `blocked_count` is the exact number (a lower
+bound while `complete` is `false`), `blocked_truncated` says the list was cut,
+and `deferred_count` counts residue this caller's kind, age or exclusion policy
+did not select. `null` counts mean that pass produced no observation. These
+fields are observations only and never change what may be deleted. When
+recovery makes no progress the error says `recovery made no progress`, carries
+this report, and the CLI prints a preserve-first plan on stderr: existing
+`transaction quarantine` commands in order — the canonical operation directory
+first, then each `.prune-*` generation — only for allowlisted names and only
+where the canonical path state admits it. The plan is never executed for you.
+Stop all hosts, review it, run it one command at a time, and stop at the first
+result that is not `quarantined`, then rerun lint fix. A pass that made progress
+asks for a rerun instead, because a blocked entry can complete on the next pass.
+Quarantining a `.prune-*` entry while its canonical path is still a directory is
+refused with an explicit canonical-first message.
+
 If repair reports contention, inspect the current owner. Never delete a lock
 directory directly.
 
