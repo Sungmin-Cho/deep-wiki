@@ -1309,6 +1309,20 @@ function quarantineStoreEntry(options = {}) {
   const sourceIdentity = physicalDirectoryIdentity(
     source, `.wiki-meta/.transactions/${classified.sourceName}`, true, fsImpl,
   );
+  if (reservation) {
+    let reservationStat = null;
+    try { reservationStat = fsImpl.lstatSync(reservation); }
+    catch { reservationStat = null; }
+    if (reservationStat && reservationStat.isDirectory()) {
+      // The canonical path still holds its own operation directory: that directory is not this
+      // quarantine's reservation, so it has to be preserved first (issue #60).
+      throw stateError(
+        'WIKI_STATE_FILESYSTEM',
+        `quarantine reservation path ${classified.embeddedId} is a directory; quarantine operation `
+          + `${classified.embeddedId} first, then retry ${classified.sourceName}`,
+      );
+    }
+  }
   const reservationIdentity = reservation
     ? captureRegularFileIdentity(reservation, 'quarantine reservation', true, fsImpl)
     : null;

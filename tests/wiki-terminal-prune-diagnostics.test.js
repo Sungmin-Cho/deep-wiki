@@ -516,3 +516,27 @@ test('T2 CLI a progressing transaction prune pass asks for a rerun, the next pas
   }
   assert.deepEqual(quarantinesFor(root, stalled.operationId), []);
 });
+
+test('T7 quarantining a prune entry before its canonical directory explains the order and moves nothing', () => {
+  const root = wiki();
+  const stalled = createStalledQuarantine(root);
+  makeBackupPublicationAmbiguous(stalled.quarantine);
+  reinjectCanonicalDirectory(root, stalled.operationId, stalled.canonicalBytes);
+  const before = storeTree(root);
+  const owner = acquireLock({ wikiRoot: root, operation: 'issue-60-order' });
+  try {
+    assert.throws(() => scanWindow.quarantineStoreEntry({
+      wikiRoot: root,
+      token: owner.token,
+      name: path.basename(stalled.quarantine),
+      classification: { method: 'none', estimated_entries: null },
+      reason: 'operator',
+    }), (error) => error.code === 'WIKI_STATE_FILESYSTEM'
+      && error.message === `quarantine reservation path ${stalled.operationId} is a directory; `
+        + `quarantine operation ${stalled.operationId} first, then retry ${path.basename(stalled.quarantine)}`);
+  } finally {
+    releaseLock({ wikiRoot: root, token: owner.token });
+  }
+  assert.deepEqual(storeTree(root), before);
+  assert.equal(bundleCount(root), 0);
+});
