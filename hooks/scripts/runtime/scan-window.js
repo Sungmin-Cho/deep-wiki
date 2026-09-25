@@ -89,8 +89,12 @@ function blockedError(reason, message, cause) {
 function innermostCode(error) {
   let current = error;
   let code = null;
+  // The runtime's own recovery wrapper code says nothing about the cause, so only a deeper,
+  // more specific code (an errno, a filesystem classification) is reported.
   for (let depth = 0; current && depth < 16; depth += 1) {
-    if (typeof current.code === 'string') code = current.code;
+    if (typeof current.code === 'string' && current.code !== 'TRANSACTION_RECOVERY_REQUIRED') {
+      code = current.code;
+    }
     current = current.cause;
   }
   if (code === null) return null;
@@ -2092,7 +2096,9 @@ function pruneScanWindowTransactions(options = {}) {
     };
     if (transactionsIdentity === null) {
       closeOuterObservation(null);
-      return { processed: 0, removed: [], complete: true, skipped_oversized: [] };
+      return {
+        processed: 0, removed: [], complete: true, skipped_oversized: [], blocked: [], blocked_count: 0, blocked_truncated: false, deferred_count: 0,
+      };
     }
     assertBudget();
     try {
@@ -2105,7 +2111,9 @@ function pruneScanWindowTransactions(options = {}) {
     closeOuterObservation(enumerationError);
   } catch (error) {
     if (error.code === 'DEADLINE_EXCEEDED') {
-      return { processed: 0, removed: [], complete: false, skipped_oversized: [] };
+      return {
+        processed: 0, removed: [], complete: false, skipped_oversized: [], blocked: [], blocked_count: 0, blocked_truncated: false, deferred_count: 0,
+      };
     }
     throw error;
   }
@@ -2149,7 +2157,60 @@ function pruneScanWindowTransactions(options = {}) {
       assertOwnerAndParents: assertNestedParents,
     }))
   );
+  // Blocked residue is keyed by store entry name and the last outcome in this pass wins: a later
+  // commit for the same name clears it. Recording never reads the filesystem.
+  const blockedByName = new Map();
+  let deferredCount = 0;
+  const recordBlocked = (name, operationId, block) => {
+    blockedByName.set(name, {
+      name,
+      operation_id: operationId || null,
+      stage: block.stage,
+      reason: assertPruneReason(block.reason),
+      code: block.code === undefined ? null : block.code,
+      canonical: 'unknown',
+    });
+  };
+  const blockFrom = (error, stage, reason) => {
+    if (error && error.prune_block) return error.prune_block;
+    return {
+      stage,
+      reason: (error && error.prune_reason) || reason || fallbackPruneReason(error),
+      code: innermostCode(error),
+    };
+  };
+  const recordDeferred = () => { deferredCount += 1; };
+  let observerExhausted = false;
+  const observeCanonical = (operationId) => {
+    if (operationId === null || observerExhausted) return 'unknown';
+    if (remainingMs(deadline) < PRUNE_RESERVE_MS) {
+      observerExhausted = true;
+      return 'unknown';
+    }
+    try {
+      const stat = fs.lstatSync(path.join(transactions, operationId));
+      if (stat.isDirectory()) return 'directory';
+      if (stat.isFile()) return stat.nlink === 1 ? 'reservation' : 'file';
+      return 'other';
+    } catch (error) {
+      return error.code === 'ENOENT' ? 'absent' : 'unknown';
+    }
+  };
+  const reportFields = (observe) => {
+    const all = [...blockedByName.values()];
+    const listed = all.slice(0, BLOCKED_REPORT_CAP).map((entry) => ({ ...entry }));
+    if (observe) {
+      for (const entry of listed) entry.canonical = observeCanonical(entry.operation_id);
+    }
+    return {
+      blocked: listed,
+      blocked_count: all.length,
+      blocked_truncated: all.length > listed.length,
+      deferred_count: deferredCount,
+    };
+  };
   const recordCommittedPrune = (operationId, boundary) => {
+    blockedByName.delete(operationId);
     removed.push(operationId);
     invokeFault(faultInjector, boundary, { operationId });
   };
@@ -2196,6 +2257,7 @@ function pruneScanWindowTransactions(options = {}) {
         removed: [...removed],
         complete: false,
         skipped_oversized: [...skippedOversized],
+        ...reportFields(false),
       };
     } else if (!Array.isArray(error.terminal_prune.skipped_oversized)) {
       error.terminal_prune.skipped_oversized = [...skippedOversized];
@@ -2230,13 +2292,19 @@ function pruneScanWindowTransactions(options = {}) {
       let reservationBytes;
       let reservationJournal;
       let operationId;
+      let deferReservation = false;
       try {
         operationId = validateOperationId(entry.name);
         reservationIdentity = regularFileIdentity(
           fs.lstatSync(reservation, { bigint: true }),
         );
         assertBudget();
-        if (!reservationIdentity) continue;
+        if (!reservationIdentity) {
+          recordBlocked(entry.name, operationId, {
+            stage: 'reservation-only', reason: 'reservation-mismatch', code: null,
+          });
+          continue;
+        }
         reservationBytes = fs.readFileSync(reservation);
         assertBudget();
         assertRegularFileIdentity(reservation, reservationIdentity);
@@ -2245,34 +2313,65 @@ function pruneScanWindowTransactions(options = {}) {
         validateJournal(reservationJournal, operationId, physicalRoot);
         if (reservationJournal.operation_id !== operationId
             || reservationJournal.transitions.at(-1) !== 'cleaned'
-            || !reservationBytes.equals(stageBytes(reservationJournal))
-            || (kinds && !kinds.has(reservationJournal.kind))) continue;
-        if (operationId === excludeOperationId) continue;
-        assertResidueReclaimable(reservationJournal);
+            || !reservationBytes.equals(stageBytes(reservationJournal))) {
+          recordBlocked(entry.name, operationId, {
+            stage: 'reservation-only', reason: 'reservation-mismatch', code: null,
+          });
+          continue;
+        }
+        if ((kinds && !kinds.has(reservationJournal.kind))
+            || operationId === excludeOperationId) {
+          // Counted after the quarantine check: a reservation paired with a quarantine directory
+          // is that quarantine's residue and is counted there.
+          deferReservation = true;
+        } else {
+          assertResidueReclaimable(reservationJournal);
+        }
       } catch (error) {
         throwIfEnsureProtected(error);
         if (error.code === 'DEADLINE_EXCEEDED') {
           complete = false;
           break;
         }
+        // An invalid name is not a reservation, and the entry's own ENOENT means it is gone.
+        if (operationId !== undefined && innermostCode(error) !== 'ENOENT') {
+          recordBlocked(entry.name, operationId,
+            blockFrom(error, 'reservation-only', 'reservation-mismatch'));
+        }
         continue;
       }
       let matchingQuarantine = false;
+      let matchingName = false;
       try {
-        matchingQuarantine = fs.readdirSync(transactions).some((name) => {
-          if (!name.startsWith('.prune-')) return false;
-          try { return operationIdFromPruneName(name) === operationId; }
-          catch { return false; }
-        });
+        for (const candidate of fs.readdirSync(transactions, { withFileTypes: true })) {
+          if (!candidate.name.startsWith('.prune-')) continue;
+          let embedded;
+          try { embedded = operationIdFromPruneName(candidate.name); }
+          catch { continue; }
+          if (embedded !== operationId) continue;
+          matchingName = true;
+          if (candidate.isDirectory()) matchingQuarantine = true;
+        }
         assertBudget();
       } catch (error) {
         if (error.code === 'DEADLINE_EXCEEDED') {
           complete = false;
           break;
         }
+        recordBlocked(entry.name, operationId, blockFrom(error, 'reservation-only'));
         continue;
       }
       if (matchingQuarantine) continue;
+      if (matchingName) {
+        recordBlocked(entry.name, operationId, {
+          stage: 'reservation-only', reason: 'matching-quarantine-not-directory', code: null,
+        });
+        continue;
+      }
+      if (deferReservation) {
+        recordDeferred();
+        continue;
+      }
       try {
         invokeFault(faultInjector, 'before-canonical-reservation-only-owner-check', {
           operationId,
@@ -2290,7 +2389,12 @@ function pruneScanWindowTransactions(options = {}) {
         assertRegularFileIdentity(reservation, reservationIdentity);
         const currentBytes = fs.readFileSync(reservation);
         assertRegularFileIdentity(reservation, reservationIdentity);
-        if (!currentBytes.equals(reservationBytes)) continue;
+        if (!currentBytes.equals(reservationBytes)) {
+          recordBlocked(entry.name, operationId, {
+            stage: 'reservation-only', reason: 'reservation-mismatch', code: null,
+          });
+          continue;
+        }
         assertBudget();
         assertEnsureBoundaryFor(reservationJournal)(
           'before-canonical-reservation-only-unlink',
@@ -2309,7 +2413,12 @@ function pruneScanWindowTransactions(options = {}) {
         throwIfEnsureProtected(error);
         if (error.code === 'ENOENT'
             || error.code === 'TRANSACTION_RECOVERY_REQUIRED'
-            || error.code === 'SCAN_WINDOW_FILESYSTEM') continue;
+            || error.code === 'SCAN_WINDOW_FILESYSTEM') {
+          if (innermostCode(error) !== 'ENOENT') {
+            recordBlocked(entry.name, operationId, blockFrom(error, 'reservation-only'));
+          }
+          continue;
+        }
         throwWithTerminalPrune(error);
       }
       continue;
@@ -2351,6 +2460,22 @@ function pruneScanWindowTransactions(options = {}) {
       let journal;
       let operationId;
       let resumedFromBackup = false;
+      let embeddedId = null;
+      try { embeddedId = operationIdFromPruneName(entry.name); } catch { embeddedId = null; }
+      let step = 'quarantine-identity';
+      const STEP_REASONS = {
+        'quarantine-identity': 'quarantine-identity-changed',
+        contents: 'unexpected-entries',
+        'empty-reservation': 'reservation-mismatch',
+        evidence: 'evidence-mismatch',
+        backup: 'backup-mismatch',
+        journal: 'journal-invalid',
+      };
+      const blockDiscovery = (reason, operationIdForRecord = embeddedId, error = null) => {
+        recordBlocked(entry.name, operationIdForRecord, {
+          stage: 'discovery', reason, code: innermostCode(error),
+        });
+      };
       try {
         quarantineIdentity = inspectPhysicalDirectory(
           quarantine,
@@ -2358,6 +2483,7 @@ function pruneScanWindowTransactions(options = {}) {
           'terminal journal prune quarantine',
         );
         assertBudget();
+        step = 'contents';
         const names = semanticNamesForDiscovery(
           quarantine,
           quarantineIdentity,
@@ -2366,14 +2492,28 @@ function pruneScanWindowTransactions(options = {}) {
         assertBudget();
         if (names.length === 0) {
           operationId = operationIdFromPruneName(entry.name);
-          if (operationId === excludeOperationId) continue;
+          if (operationId === excludeOperationId) {
+            recordDeferred();
+            continue;
+          }
+          step = 'empty-reservation';
           const adapter = defaultJournalAdapter(physicalRoot, operationId, nestedJunkContext);
           const reservation = adapter.locations.transaction;
-          const reservationIdentity = regularFileIdentity(
-            fs.lstatSync(reservation, { bigint: true }),
-          );
+          let reservationStat;
+          try { reservationStat = fs.lstatSync(reservation, { bigint: true }); }
+          catch (error) {
+            if (error.code === 'ENOENT') {
+              blockDiscovery('reservation-missing', embeddedId, error);
+              continue;
+            }
+            throw error;
+          }
+          const reservationIdentity = regularFileIdentity(reservationStat);
           assertBudget();
-          if (!reservationIdentity) continue;
+          if (!reservationIdentity) {
+            blockDiscovery('reservation-missing');
+            continue;
+          }
           const reservationBytes = fs.readFileSync(reservation);
           assertBudget();
           assertRegularFileIdentity(reservation, reservationIdentity);
@@ -2382,8 +2522,14 @@ function pruneScanWindowTransactions(options = {}) {
           validateJournal(reservationJournal, operationId, physicalRoot);
           if (reservationJournal.operation_id !== operationId
               || reservationJournal.transitions.at(-1) !== 'cleaned'
-              || !reservationBytes.equals(stageBytes(reservationJournal))
-              || (kinds && !kinds.has(reservationJournal.kind))) continue;
+              || !reservationBytes.equals(stageBytes(reservationJournal))) {
+            blockDiscovery('reservation-mismatch');
+            continue;
+          }
+          if (kinds && !kinds.has(reservationJournal.kind)) {
+            recordDeferred();
+            continue;
+          }
           assertResidueReclaimable(reservationJournal);
           try {
             invokeFault(faultInjector, 'before-empty-quarantine-owner-check', {
@@ -2420,7 +2566,12 @@ function pruneScanWindowTransactions(options = {}) {
               break;
             }
             throwIfEnsureProtected(error);
-            if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') continue;
+            if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+              const block = blockFrom(error, 'empty-quarantine');
+              const name = error.prune_name || entry.name;
+              recordBlocked(name, name === operationId ? operationId : embeddedId, block);
+              continue;
+            }
             throwWithTerminalPrune(error);
           }
           continue;
@@ -2434,14 +2585,19 @@ function pruneScanWindowTransactions(options = {}) {
               'journal.backup.pending',
               'source.reservation.pending',
             ].includes(name))) {
+          blockDiscovery('unexpected-entries');
           continue;
         }
+        step = 'evidence';
         const evidencePath = hasJournal ? quarantinedJournal : quarantinedBackup;
         const evidenceIdentity = (hasJournal ? regularFileIdentity : linkedRegularFileIdentity)(
           fs.lstatSync(evidencePath, { bigint: true }),
         );
         assertBudget();
-        if (!evidenceIdentity) continue;
+        if (!evidenceIdentity) {
+          blockDiscovery('evidence-mismatch');
+          continue;
+        }
         journalBytes = fs.readFileSync(evidencePath);
         assertBudget();
         if (hasJournal) {
@@ -2455,7 +2611,10 @@ function pruneScanWindowTransactions(options = {}) {
           if (!identitiesMatch(currentEvidenceIdentity, evidenceIdentity)
               || currentEvidenceIdentity.mtimeNs !== evidenceIdentity.mtimeNs
               || currentEvidenceIdentity.nlink !== evidenceIdentity.nlink
-              || ![1n, 2n].includes(evidenceIdentity.nlink)) continue;
+              || ![1n, 2n].includes(evidenceIdentity.nlink)) {
+            blockDiscovery('evidence-mismatch');
+            continue;
+          }
         }
         if (hasJournal) journalIdentity = evidenceIdentity;
         else {
@@ -2464,11 +2623,15 @@ function pruneScanWindowTransactions(options = {}) {
           resumedFromBackup = true;
         }
         if (hasBackup && hasJournal) {
+          step = 'backup';
           backupIdentity = linkedRegularFileIdentity(
             fs.lstatSync(quarantinedBackup, { bigint: true }),
           );
           assertBudget();
-          if (!backupIdentity) continue;
+          if (!backupIdentity) {
+            blockDiscovery('backup-mismatch');
+            continue;
+          }
           const backupBytes = fs.readFileSync(quarantinedBackup);
           assertBudget();
           const currentBackupIdentity = linkedRegularFileIdentity(
@@ -2477,22 +2640,41 @@ function pruneScanWindowTransactions(options = {}) {
           assertBudget();
           if (!identitiesMatch(currentBackupIdentity, backupIdentity)
               || currentBackupIdentity.mtimeNs !== backupIdentity.mtimeNs
-              || currentBackupIdentity.nlink !== backupIdentity.nlink) continue;
-          if (!backupBytes.equals(journalBytes)) continue;
+              || currentBackupIdentity.nlink !== backupIdentity.nlink
+              || !backupBytes.equals(journalBytes)) {
+            blockDiscovery('backup-mismatch');
+            continue;
+          }
         }
+        step = 'quarantine-identity';
         const currentQuarantineIdentity = inspectPhysicalDirectory(
           quarantine,
           quarantine,
           'terminal journal prune quarantine',
         );
         assertBudget();
-        if (!identitiesMatch(currentQuarantineIdentity, quarantineIdentity)) continue;
+        if (!identitiesMatch(currentQuarantineIdentity, quarantineIdentity)) {
+          blockDiscovery('quarantine-identity-changed');
+          continue;
+        }
+        step = 'journal';
         journal = JSON.parse(journalBytes.toString('utf8'));
         operationId = validateOperationId(journal.operation_id);
-        if (!entry.name.startsWith(`.prune-${operationId.length}-${operationId}-`)
-            || operationId === excludeOperationId) continue;
+        if (!entry.name.startsWith(`.prune-${operationId.length}-${operationId}-`)) {
+          // A name whose embedded id disagrees with its journal must never be grouped with
+          // either operation's canonical entry.
+          blockDiscovery('journal-invalid', null);
+          continue;
+        }
+        if (operationId === excludeOperationId) {
+          recordDeferred();
+          continue;
+        }
         validateJournal(journal, operationId, physicalRoot);
-        if (!journalBytes.equals(stageBytes(journal))) continue;
+        if (!journalBytes.equals(stageBytes(journal))) {
+          blockDiscovery('journal-invalid');
+          continue;
+        }
       } catch (error) {
         if (error.terminal_prune) throw error;
         throwIfEnsureProtected(error);
@@ -2506,15 +2688,29 @@ function pruneScanWindowTransactions(options = {}) {
           if (error.nestedJunkBudgetExhausted === true) break;
           continue;
         }
+        // The quarantine's own disappearance means it resolved; anything else stays behind.
+        if (!(step === 'quarantine-identity' && innermostCode(error) === 'ENOENT')) {
+          blockDiscovery(
+            STEP_REASONS[step],
+            step === 'journal' && operationId === undefined ? null : embeddedId,
+            error,
+          );
+        }
         continue;
       }
-      if (journal.transitions.at(-1) !== 'cleaned'
-          || (kinds && !kinds.has(journal.kind))
+      if (journal.transitions.at(-1) !== 'cleaned') {
+        blockDiscovery('journal-not-terminal');
+        continue;
+      }
+      if ((kinds && !kinds.has(journal.kind))
           || (!(resumedFromBackup || resumableOnly) && !terminalJournalIsOldEnough(
             journalIdentity,
             now.getTime(),
-          maxAgeDays,
-          ))) continue;
+            maxAgeDays,
+          ))) {
+        recordDeferred();
+        continue;
+      }
       try { assertResidueReclaimable(journal); }
       catch (error) { throwIfEnsureProtected(error); }
 
@@ -2562,7 +2758,15 @@ function pruneScanWindowTransactions(options = {}) {
           break;
         }
         throwIfEnsureProtected(error);
-        if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') continue;
+        if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+          const name = error.prune_name || entry.name;
+          recordBlocked(
+            name,
+            name === operationId ? operationId : embeddedId,
+            blockFrom(error, 'evidence'),
+          );
+          continue;
+        }
         throwWithTerminalPrune(error);
       }
       continue;
@@ -2672,11 +2876,27 @@ function pruneScanWindowTransactions(options = {}) {
         break;
       }
       throwIfEnsureProtected(error);
-      if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') continue;
+      if (error.code === 'TRANSACTION_RECOVERY_REQUIRED') {
+        const name = error.prune_name || entry.name;
+        recordBlocked(
+          name,
+          name === entry.name || name === operationId ? operationId : (() => {
+            try { return operationIdFromPruneName(name); } catch { return null; }
+          })(),
+          blockFrom(error, 'quarantine-entry'),
+        );
+        continue;
+      }
       throwWithTerminalPrune(error);
     }
   }
-  return { processed: removed.length, removed, complete, skipped_oversized: skippedOversized };
+  return {
+    processed: removed.length,
+    removed,
+    complete,
+    skipped_oversized: skippedOversized,
+    ...reportFields(true),
+  };
 }
 
 function deterministicEnsureId(wikiRoot, proposed) {
