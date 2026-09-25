@@ -346,6 +346,10 @@ function reinjectCanonicalDirectory(root, operationId, bytes) {
   const directory = path.join(root, '.wiki-meta', '.transactions', operationId);
   fs.mkdirSync(directory);
   fs.writeFileSync(path.join(directory, 'journal.json'), bytes);
+  // A re-materialized journal carries its original, older timestamp; a fresh mtime would make it
+  // look too young for the prune clock the fixture was built with.
+  const settled = new Date('2026-07-01T00:00:00Z');
+  fs.utimesSync(path.join(directory, 'journal.json'), settled, settled);
   return directory;
 }
 
