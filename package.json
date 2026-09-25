@@ -1,6 +1,6 @@
 {
   "name": "deep-wiki",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "LLM-managed markdown wiki — 5 cross-platform skills with a portable Node 22 runtime for Claude Code and Codex.",
   "author": {
     "name": "Sungmin-Cho"

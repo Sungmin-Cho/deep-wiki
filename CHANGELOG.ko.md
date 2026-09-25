@@ -7,6 +7,20 @@ deep-wiki의 주요 변경사항을 기록합니다.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-09-25 (막힌 prune 진단)
+
+### 추가
+
+- 모든 terminal-prune 결과와 `lint fix`·`transaction prune`의 `terminal_prune` 보고가 그 패스가 복구하지 못한 것을 알려 줍니다: `blocked`는 마지막 결과가 거부인 store 항목을 최대 32개까지 `stage`, `reason`, 원인 `code`, 관찰한 `canonical` 경로 종류와 함께 나열하고, `blocked_count`는 정확한 개수, `blocked_truncated`는 목록이 잘렸는지, `deferred_count`는 호출자의 kind·나이·제외 정책 때문에 선택되지 않은 잔여물 수입니다. `complete`가 `false`면 개수는 하한이고, `null`은 그 패스가 관찰을 남기지 못했다는 뜻입니다. 거부 기록은 파일시스템을 읽지 않으며 삭제 가능 범위를 바꾸지 않습니다.
+- 복구가 진전하지 못하면 `lint fix`가 일반 `TRANSACTION_RECOVERY_REQUIRED` 메시지를 반복하는 대신 `recovery made no progress`와 위 보고를 담아 실패하고, CLI가 보존 우선 계획을 출력합니다: 기존 `transaction quarantine` 명령을 순서대로 — 원본 operation 디렉터리 먼저, 그다음 각 `.prune-*` 세대 — 허용 목록 이름이고 원본 경로 상태가 허용할 때만 냅니다. 계획은 실행되지 않으며, 진전이 있던 패스는 재실행을 먼저 권하고, `transaction prune` 호출자에게는 같은 lock으로 다시 실행하거나 lock을 먼저 풀라고 안내합니다.
+
+### 변경
+
+- `lint inspect`와 snapshot이 `.prune-*` 디렉터리 개수와 정렬상 첫 이름을 알려 줍니다.
+- 원본 경로가 아직 디렉터리인데 `.prune-*` 항목을 격리하면 `quarantine reservation must be a physical regular file` 대신 원본을 먼저 격리하라는 명시적 메시지로 실패합니다.
+- source rename 전에 실패한 격리 시도가 재시도마다 meta만 든 번들을 남길 수 있다는 점을 storage layout에 적었습니다. 번들은 여전히 자동 삭제하지 않으며, 이를 제한하는 작업은 #62에서 다룹니다.
+- 안전 검사, 삭제 권한, 오류 code, exit code, lock·journal 프로토콜과 모든 위키 상태 형식은 바뀌지 않았습니다. 이 변경은 두 plugin manifest와 package metadata 모두에서 별도 1.12.0 설치 식별자로 배포됩니다.
+
 ## [1.11.0] — 2026-09-15 (main-caller ingest)
 
 ### 변경

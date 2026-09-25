@@ -13,7 +13,9 @@ const versions = [
   readJson('.claude-plugin/plugin.json').version,
   readJson('.codex-plugin/plugin.json').version,
   readJson('package.json').version];
-test('1.11.0 release keeps every package version and changelog heading exact', () => { assert.strictEqual(versions.join(','), '1.11.0,1.11.0,1.11.0');
+test('1.12.0 release keeps every package version and changelog heading exact', () => { assert.strictEqual(versions.join(','), '1.12.0,1.12.0,1.12.0');
+  assert.match(readText('CHANGELOG.md'), /^## \[1\.12\.0\] — 2026-09-25 \(blocked prune diagnostics\)$/m);
+  assert.match(readText('CHANGELOG.ko.md'), /^## \[1\.12\.0\] — 2026-09-25 \(막힌 prune 진단\)$/m);
   assert.match(readText('CHANGELOG.md'), /^## \[1\.11\.0\] — 2026-09-15 \(main-caller ingest\)$/m);
   assert.match(readText('CHANGELOG.ko.md'), /^## \[1\.11\.0\] — 2026-09-15 \(main-caller ingest\)$/m);
   assert.match(readText('CHANGELOG.md'), /^## \[1\.10\.1\] — 2026-08-26 \(worker dispatch contract\)$/m);

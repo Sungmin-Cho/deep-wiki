@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-09-25 (blocked prune diagnostics)
+
+### Added
+
+- Every terminal-prune result, and the `terminal_prune` report of `lint fix` and `transaction prune`, now says what a pass could not recover: `blocked` lists up to 32 store entries whose last outcome was a refusal, each with its `stage`, `reason`, cause `code` and the observed `canonical` path kind; `blocked_count` is the exact number, `blocked_truncated` says the list was cut, and `deferred_count` counts residue the caller's kind, age or exclusion policy did not select. Counts are lower bounds while `complete` is `false`, and `null` means the pass produced no observation. Recording a refusal never reads the filesystem and never changes what may be deleted.
+- When recovery makes no progress, `lint fix` now fails with `recovery made no progress` plus that report instead of repeating the generic `TRANSACTION_RECOVERY_REQUIRED` message, and the CLI prints a preserve-first plan: existing `transaction quarantine` commands in order — canonical operation directory first, then each `.prune-*` generation — only for allowlisted names and only where the canonical path state admits it. The plan is never executed; a pass that made progress asks for a rerun instead, and a `transaction prune` caller is told to rerun under its lock or release it first.
+
+### Changed
+
+- `lint inspect` and snapshot name the number of `.prune-*` directories and the first one in sorted order.
+- Quarantining a `.prune-*` entry while its canonical path is still a directory now fails with an explicit canonical-first message instead of `quarantine reservation must be a physical regular file`.
+- The storage layout documents that a quarantine attempt failing before its source rename can leave a metadata-only bundle on each retry; bundles are still never auto-deleted, and limiting that is tracked in #62.
+- Safety checks, deletion authority, error codes, exit codes, the lock and journal protocols and every wiki state format are unchanged. These changes ship under a distinct 1.12.0 installation identity across both plugin manifests and package metadata.
+
 ## [1.11.0] — 2026-09-15 (main-caller ingest)
 
 ### Changed
