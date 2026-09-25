@@ -540,3 +540,81 @@ test('T7 quarantining a prune entry before its canonical directory explains the 
   assert.deepEqual(storeTree(root), before);
   assert.equal(bundleCount(root), 0);
 });
+
+function deadPid() {
+  const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  return Number(child.stdout);
+}
+
+function reinjectVersions(root, stem = 'note', count = 5) {
+  const versions = path.join(root, '.wiki-meta', '.versions');
+  for (let index = 1; index <= count; index += 1) {
+    fs.writeFileSync(path.join(versions, `${stem}.v${index}.md`), `# ${stem} v${index}\n`);
+  }
+}
+
+function reinjectDeadLock(root) {
+  // A structurally valid same-host owner whose process has exited.
+  acquireLock({ wikiRoot: root, operation: 'ingest', pid: deadPid(), now: new Date('2026-09-21T06:59:54Z') });
+}
+
+test('T8 reinjected residue, locks and versions each keep their existing fail-closed handling', { skip: process.platform === 'win32' }, async (t) => {
+  await t.test('(a) a reinjected residue group is reported again and a second plan preserves it', () => {
+    const root = wiki();
+    const stalled = createStalledQuarantine(root);
+    makeBackupPublicationAmbiguous(stalled.quarantine);
+    const firstLint = spawnSync(process.execPath, [CLI, 'lint', 'fix', '--wiki-root', root, '--json'], { encoding: 'utf8' });
+    runHintCommands(firstLint.stderr);
+    assert.equal(inspectWiki({ wikiRoot: root }).ok, true);
+    addQuarantineGeneration(root, stalled.operationId, stalled.canonicalBytes, stalled.now);
+    const error = fixError(root, stalled.now);
+    assert.equal(error.terminal_prune.blocked_count, 1);
+    const secondLint = spawnSync(process.execPath, [CLI, 'lint', 'fix', '--wiki-root', root, '--json'], { encoding: 'utf8' });
+    runHintCommands(secondLint.stderr);
+    assert.equal(inspectWiki({ wikiRoot: root }).ok, true);
+    const bundles = fs.readdirSync(path.join(root, '.wiki-meta', '.quarantine'));
+    assert.equal(new Set(bundles).size, 2);
+  });
+
+  await t.test('(b1) a dead same-host owner is self-healed by lint fix', () => {
+    const root = wiki();
+    reinjectDeadLock(root);
+    const result = fixWiki({ wikiRoot: root });
+    assert.notEqual(result.status, 'skipped');
+    assert.equal(fs.existsSync(path.join(root, '.wiki-meta', '.wiki-lock')), false);
+  });
+
+  await t.test('(b2) a foreign-host owner is never taken over', () => {
+    const root = wiki();
+    const foreign = acquireLock({ wikiRoot: root, operation: 'ingest', hostname: 'other-host', pid: 1 });
+    const ownerPath = path.join(root, '.wiki-meta', '.wiki-lock', 'owner.json');
+    const before = fs.readFileSync(ownerPath);
+    assert.deepEqual(fixWiki({ wikiRoot: root }), { status: 'skipped', reason: 'LOCK_CONTENDED' });
+    assert.equal(fs.readFileSync(ownerPath).equals(before), true);
+    releaseLock({ wikiRoot: root, token: foreign.token, hostname: 'other-host' });
+  });
+
+  await t.test('(c) reinjected excess versions are diagnosed and reclaimed', () => {
+    const root = wiki();
+    reinjectVersions(root);
+    assert.ok(inspectWiki({ wikiRoot: root }).issues.some((issue) => issue.code === 'EXCESS_VERSIONS'));
+    fixWiki({ wikiRoot: root });
+    assert.equal(inspectWiki({ wikiRoot: root }).issues.some((issue) => issue.code === 'EXCESS_VERSIONS'), false);
+  });
+
+  await t.test('(a)+(b1)+(c) together: the lock heals, the residue blocks, versions wait', () => {
+    const root = wiki();
+    const stalled = createStalledQuarantine(root);
+    makeBackupPublicationAmbiguous(stalled.quarantine);
+    reinjectCanonicalDirectory(root, stalled.operationId, stalled.canonicalBytes);
+    reinjectVersions(root);
+    reinjectDeadLock(root);
+    const versionsBefore = fs.readdirSync(path.join(root, '.wiki-meta', '.versions')).sort();
+    const error = fixError(root, stalled.now);
+    assert.equal(error.code, 'TRANSACTION_RECOVERY_REQUIRED');
+    assert.equal(error.terminal_prune.blocked_count, 1);
+    assert.equal(error.terminal_prune.blocked[0].canonical, 'directory');
+    assert.deepEqual(fs.readdirSync(path.join(root, '.wiki-meta', '.versions')).sort(), versionsBefore);
+    assert.equal(fs.existsSync(path.join(root, '.wiki-meta', '.wiki-lock')), false);
+  });
+});
