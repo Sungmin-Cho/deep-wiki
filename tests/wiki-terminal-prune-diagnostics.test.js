@@ -350,3 +350,169 @@ test('inspection names the sorted first prune entry and the count', () => {
     && error.message.includes('(2 .prune-* entries; first: .prune-5-aaaaa-debris)')
     && /stopped-host/.test(error.message));
 });
+
+const { spawnSync } = require('node:child_process');
+const wikiRuntime = require('../scripts/wiki-runtime.js');
+
+const CLI = path.join(__dirname, '..', 'scripts', 'wiki-runtime.js');
+const ID_A = `scan-window-ensure-${'a'.repeat(40)}`;
+const ID_B = `scan-window-ensure-${'b'.repeat(40)}`;
+const pruneName = (id, suffix = '1-00000000-0000-4000-8000-000000000000') => `.prune-${id.length}-${id}-${suffix}`;
+
+function observation(blocked, extra = {}) {
+  return {
+    processed: 0,
+    blocked,
+    blocked_count: blocked.length,
+    blocked_truncated: false,
+    ...extra,
+  };
+}
+
+function blockedEntry(name, operationId, canonical, stage = 'backup-publication') {
+  return { name, operation_id: operationId, stage, reason: 'publication-ambiguous', code: null, canonical };
+}
+
+function quarantineLines(hint) {
+  return hint.split('\n').filter((line) => line.includes(' transaction quarantine '));
+}
+
+test('the preserve-first plan follows the canonical-path decision table', () => {
+  const root = '/tmp/deep wiki/root';
+  const first = pruneName(ID_A, '1-00000000-0000-4000-8000-000000000001');
+  const second = pruneName(ID_A, '1-00000000-0000-4000-8000-000000000002');
+  const directory = wikiRuntime.blockedPruneHint(observation([
+    blockedEntry(second, ID_A, 'directory'),
+    blockedEntry(first, ID_A, 'directory'),
+  ]), root);
+  const lines = quarantineLines(directory);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], new RegExp(`--operation-id '${ID_A}'`));
+  assert.match(lines[1], new RegExp(`--operation-id '${first}'`));
+  assert.match(lines[2], new RegExp(`--operation-id '${second}'`));
+  assert.ok(lines.every((line) => line.includes("--wiki-root '/tmp/deep wiki/root'")));
+  assert.doesNotMatch(directory, /\$\(/);
+  assert.match(directory, /Stop all hosts/);
+  assert.match(directory, /first result that is not "quarantined"/);
+
+  for (const canonical of ['reservation', 'absent']) {
+    const hint = wikiRuntime.blockedPruneHint(observation([blockedEntry(first, ID_A, canonical)]), root);
+    assert.deepEqual(quarantineLines(hint).length, 1, canonical);
+  }
+  for (const canonical of ['file', 'other', 'unknown']) {
+    const hint = wikiRuntime.blockedPruneHint(observation([blockedEntry(first, ID_A, canonical)]), root);
+    assert.equal(quarantineLines(hint).length, 0, canonical);
+    assert.match(hint, new RegExp(`canonical path is ${canonical}`));
+  }
+  const reservationOnly = wikiRuntime.blockedPruneHint(observation([
+    blockedEntry(ID_B, ID_B, 'reservation', 'reservation-only'),
+  ]), root);
+  assert.equal(quarantineLines(reservationOnly).length, 0);
+  const unknownOperation = wikiRuntime.blockedPruneHint(observation([
+    blockedEntry(pruneName(ID_B), null, 'unknown', 'discovery'),
+  ]), root);
+  assert.equal(quarantineLines(unknownOperation).length, 0);
+  assert.match(unknownOperation, /operation is unknown/);
+  const notIsolatable = wikiRuntime.blockedPruneHint(observation([
+    blockedEntry(pruneName('b-preserved-x'), 'b-preserved-x', 'directory'),
+  ]), root);
+  assert.equal(quarantineLines(notIsolatable).length, 0);
+  assert.match(notIsolatable, /not isolatable by command/);
+  const truncated = wikiRuntime.blockedPruneHint(observation(
+    [blockedEntry(first, ID_A, 'absent')],
+    { blocked_count: 40, blocked_truncated: true },
+  ), root);
+  assert.match(truncated, /rerun lint fix to list the remaining entries/);
+});
+
+test('a pass that made progress asks for a rerun instead of a quarantine plan', () => {
+  const hint = wikiRuntime.blockedPruneHint(observation(
+    [blockedEntry(pruneName(ID_A), ID_A, 'directory')],
+    { processed: 1 },
+  ), '/tmp/root');
+  assert.match(hint, /Progress was made on this pass; rerun lint fix/);
+  assert.equal(quarantineLines(hint).length, 0);
+  assert.equal(wikiRuntime.blockedPruneHint(observation([]), '/tmp/root'), null);
+  assert.equal(wikiRuntime.blockedPruneHint({ ...observation([]), blocked_count: null }, '/tmp/root'), null);
+});
+
+function runHintCommands(hint) {
+  const outcomes = [];
+  for (const line of quarantineLines(hint)) {
+    const ran = spawnSync('/bin/sh', ['-c', line], { encoding: 'utf8' });
+    assert.equal(ran.status, 0, ran.stderr);
+    outcomes.push(JSON.parse(ran.stdout).status);
+  }
+  return outcomes;
+}
+
+test('T3/T6 executing the printed plan preserves every generation and clears inspection', { skip: process.platform === 'win32' }, () => {
+  const root = wiki();
+  const stalled = createStalledQuarantine(root);
+  makeBackupPublicationAmbiguous(stalled.quarantine);
+  addQuarantineGeneration(root, stalled.operationId, stalled.canonicalBytes, stalled.now);
+  addQuarantineGeneration(root, stalled.operationId, stalled.canonicalBytes, stalled.now);
+  reinjectCanonicalDirectory(root, stalled.operationId, stalled.canonicalBytes);
+  const ownerToken = JSON.parse(stalled.canonicalBytes.toString('utf8')).owner_token;
+  const before = storeTree(root);
+
+  const lint = spawnSync(process.execPath, [CLI, 'lint', 'fix', '--wiki-root', root, '--json'], {
+    encoding: 'utf8', shell: false,
+  });
+  assert.notEqual(lint.status, 0);
+  assert.equal(lint.stderr.includes(ownerToken), false);
+  assert.equal(lint.stderr.includes('"transitions"'), false);
+  const payload = JSON.parse(lint.stderr.split('\n')[0]);
+  assert.equal(payload.terminal_prune.blocked_count, 3);
+  assert.equal(payload.terminal_prune.blocked.some((entry) => entry.name.includes(root)), false);
+  const lines = quarantineLines(lint.stderr);
+  assert.equal(lines.length, 4);
+  assert.match(lines[0], new RegExp(`--operation-id '${stalled.operationId}'`));
+  assert.deepEqual(storeTree(root), before);
+
+  assert.deepEqual(runHintCommands(lint.stderr), ['quarantined', 'quarantined', 'quarantined', 'quarantined']);
+  assert.equal(inspectWiki({ wikiRoot: root }).ok, true);
+  const bundles = fs.readdirSync(path.join(root, '.wiki-meta', '.quarantine'));
+  assert.equal(bundles.length, 4);
+  for (const bundle of bundles) {
+    const tree = path.join(root, '.wiki-meta', '.quarantine', bundle, 'tree', 'journal.json');
+    assert.equal(fs.readFileSync(tree).equals(stalled.canonicalBytes), true);
+  }
+});
+
+test('T6 a plan for an absent canonical path clears inspection after one command', { skip: process.platform === 'win32' }, () => {
+  const root = wiki();
+  const stalled = createStalledQuarantine(root);
+  makeBackupPublicationAmbiguous(stalled.quarantine);
+  const lint = spawnSync(process.execPath, [CLI, 'lint', 'fix', '--wiki-root', root, '--json'], {
+    encoding: 'utf8', shell: false,
+  });
+  assert.notEqual(lint.status, 0);
+  assert.equal(quarantineLines(lint.stderr).length, 1);
+  assert.deepEqual(runHintCommands(lint.stderr), ['quarantined']);
+  assert.equal(inspectWiki({ wikiRoot: root }).ok, true);
+});
+
+test('T2 CLI a progressing transaction prune pass asks for a rerun, the next pass resolves', () => {
+  const root = wiki();
+  const stalled = createStalledQuarantine(root, { stopAt: 'before-reservation-destination-link' });
+  reinjectCanonicalDirectory(root, stalled.operationId, stalled.canonicalBytes);
+  const owner = acquireLock({ wikiRoot: root, operation: 'issue-60-cli-prune' });
+  try {
+    const run = () => spawnSync(process.execPath, [
+      CLI, 'transaction', 'prune', '--wiki-root', root,
+      '--lock-token', owner.token, '--max-age-days', '0', '--json',
+    ], { encoding: 'utf8', shell: false });
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).blocked_count, 1);
+    assert.match(first.stderr, /Progress was made on this pass; rerun lint fix/);
+    const second = run();
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(second.stdout).blocked_count, 0);
+    assert.equal(second.stderr, '');
+  } finally {
+    releaseLock({ wikiRoot: root, token: owner.token });
+  }
+  assert.deepEqual(quarantinesFor(root, stalled.operationId), []);
+});

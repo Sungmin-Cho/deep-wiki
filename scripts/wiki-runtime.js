@@ -737,6 +737,84 @@ function oversizedHint(error) {
   return 'TRANSACTION_OVERSIZED is not automatically isolatable; stop all hosts, restore filesystem readability, then rerun.';
 }
 
+function physicalWikiRootForHint(value) {
+  try { return fs.realpathSync.native(path.resolve(value)); }
+  catch { return null; }
+}
+
+// Turns a prune observation into a reviewable, preserve-first plan (issue #60). The plan is only
+// printed: every command is an existing `transaction quarantine`, which moves and never deletes.
+function blockedPruneHint(observation, wikiRoot) {
+  if (!observation || !Array.isArray(observation.blocked) || !wikiRoot
+      || !(observation.blocked_count > 0)) return null;
+  if (observation.processed > 0) {
+    return 'Progress was made on this pass; rerun lint fix. Preserve residue only if the same '
+      + 'entries stay blocked on a pass with no progress.';
+  }
+  const { isIsolatableStoreName } = require(path.join(runtimeRoot, 'transaction-debris.js'));
+  const isolatable = (name) => isIsolatableStoreName(name, scanWindow.operationIdFromPruneName);
+  const groups = new Map();
+  const manual = [];
+  for (const entry of observation.blocked) {
+    if (!entry.operation_id) {
+      manual.push(`${entry.name}: ${entry.stage}/${entry.reason}; its operation is unknown`);
+      continue;
+    }
+    if (!groups.has(entry.operation_id)) groups.set(entry.operation_id, []);
+    groups.get(entry.operation_id).push(entry);
+  }
+  const prefix = runtimeCommandPrefix();
+  const quotedRoot = shellQuote(wikiRoot);
+  const commands = [];
+  for (const [operationId, entries] of groups) {
+    const kinds = new Set(entries.map((entry) => entry.canonical));
+    const canonical = kinds.size === 1 ? entries[0].canonical : 'unknown';
+    const prunes = entries.map((entry) => entry.name).filter((name) => name.startsWith('.prune-')).sort();
+    let targets = null;
+    if (prunes.length > 0) {
+      if (canonical === 'directory') targets = [operationId, ...prunes];
+      else if (canonical === 'reservation' || canonical === 'absent') targets = prunes;
+    } else if (canonical === 'directory'
+        && entries.every((entry) => entry.stage === 'quarantine-entry')) {
+      targets = [operationId];
+    }
+    if (targets === null) {
+      manual.push(`${operationId}: canonical path is ${canonical}; `
+        + `${entries.map((entry) => `${entry.name} ${entry.stage}/${entry.reason}`).join(', ')}`);
+      continue;
+    }
+    if (!targets.every(isolatable)) {
+      manual.push(`${operationId}: ${targets.join(', ')} are not isolatable by command`);
+      continue;
+    }
+    for (const name of targets) {
+      commands.push(`${prefix} transaction quarantine --wiki-root ${quotedRoot} --operation-id ${shellQuote(name)} --json`);
+    }
+  }
+  const lines = [
+    'Blocked terminal prune residue (observed at the end of this pass). Stop all hosts, review '
+      + 'these entries, then preserve them one command at a time in this order. Stop at the first '
+      + 'result that is not "quarantined" and rerun lint fix before continuing. Nothing is '
+      + 'deleted; bundles go to .wiki-meta/.quarantine/.',
+  ];
+  if (commands.length > 0) {
+    lines.push(process.platform === 'win32' ? 'Run (PowerShell):' : 'Run:', ...commands);
+  }
+  if (manual.length > 0) {
+    lines.push('No command is safe for these; stop all hosts and inspect them by hand:',
+      ...manual.map((line) => `- ${line}`));
+  }
+  if (observation.blocked_truncated) {
+    lines.push('After these, rerun lint fix to list the remaining entries.');
+  }
+  return lines.join('\n');
+}
+
+function writeBlockedPruneHint(observation, wikiRoot) {
+  const hint = blockedPruneHint(observation, wikiRoot);
+  if (hint) process.stderr.write(`${hint}\n`);
+}
+
 function runTransaction(argv) {
   const command = argv[0];
   if (command === 'quarantine') {
@@ -778,13 +856,20 @@ function runTransaction(argv) {
     const token = requireFlag(flags, '--lock-token');
     const wikiRoot = flags['--wiki-root'];
     const deadline = createDeadline({ budgetMs: 12_000 });
-    const pruneResult = scanWindow.pruneScanWindowTransactions({
-      wikiRoot,
-      token,
-      maxAgeDays,
-      limit: 64,
-      deadline,
-    });
+    const hintRoot = physicalWikiRootForHint(wikiRoot);
+    let pruneResult;
+    try {
+      pruneResult = scanWindow.pruneScanWindowTransactions({
+        wikiRoot,
+        token,
+        maxAgeDays,
+        limit: 64,
+        deadline,
+      });
+    } catch (error) {
+      if (error && typeof error === 'object') error.hintWikiRoot = hintRoot;
+      throw error;
+    }
     const skipped = pruneResult.skipped_oversized || [];
     const promotion = scanWindow.promoteOversizedNames({
       wikiRoot,
@@ -802,6 +887,7 @@ function runTransaction(argv) {
       promotion_failures: promotion.failures,
       telemetry_error: promotion.telemetry_error || undefined,
     });
+    writeBlockedPruneHint(pruneResult, hintRoot);
     return;
   }
   if (command === 'recover') {
@@ -894,7 +980,18 @@ function runLint(argv) {
   const command = argv[0];
   const flags = wikiFlags(argv.slice(1), {});
   if (command === 'inspect') emit(wikiState.inspectWiki({ wikiRoot: flags['--wiki-root'] }));
-  else if (command === 'fix') emit(wikiState.fixWiki({ wikiRoot: flags['--wiki-root'] }));
+  else if (command === 'fix') {
+    const hintRoot = physicalWikiRootForHint(flags['--wiki-root']);
+    let result;
+    try {
+      result = wikiState.fixWiki({ wikiRoot: flags['--wiki-root'] });
+    } catch (error) {
+      if (error && typeof error === 'object') error.hintWikiRoot = hintRoot;
+      throw error;
+    }
+    emit(result);
+    writeBlockedPruneHint(result && result.terminal_prune, hintRoot);
+  }
   else throw new UsageError('lint requires inspect or fix');
 }
 
@@ -914,6 +1011,9 @@ function exitCode(error) {
 
 function reportMainError(error) {
   emitError(error);
+  if (error && typeof error === 'object') {
+    writeBlockedPruneHint(error.terminal_prune, error.hintWikiRoot);
+  }
   if (error && error.code === 'TRANSACTION_OVERSIZED') {
     process.stderr.write(`${oversizedHint(error)}\n`);
   }
@@ -968,6 +1068,7 @@ module.exports = {
   recoverHint,
   commitRetryHint,
   oversizedHint,
+  blockedPruneHint,
   cleanupRuntimeManifests,
   runSnapshotWorker,
   quarantineStoreEntry,
