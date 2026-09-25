@@ -274,7 +274,99 @@ function observeRecoverySuppressionScope() {
   return withPermissionModelFsyncCompatibility(observeRecoverySuppressionScopeUnsafe);
 }
 
+function productionEnsureId(seed) {
+  return `scan-window-ensure-${crypto.createHash('sha256').update(String(seed)).digest('hex').slice(0, 40)}`;
+}
+
+function quarantinesFor(root, operationId) {
+  const transactions = path.join(root, '.wiki-meta', '.transactions');
+  return fs.readdirSync(transactions)
+    .filter((name) => name.startsWith(`.prune-${operationId.length}-${operationId}-`))
+    .sort()
+    .map((name) => path.join(transactions, name));
+}
+
+// Runs one ensure prune pass that stops, for `operationId` only, at `stopAt` — the shape an
+// interrupted SessionStart prune leaves behind.
+function stopPruneAt(root, operationId, stopAt, now) {
+  const owner = acquireLock({ wikiRoot: root, operation: 'stalled-prune-seed', now });
+  let reached = false;
+  try {
+    scanWindow.pruneScanWindowTransactions({
+      wikiRoot: root,
+      token: owner.token,
+      maxAgeDays: 0,
+      limit: 64,
+      kinds: ['ensure'],
+      now,
+      deadline: createDeadline({ budgetMs: 12_000 }),
+      faultInjector(boundary, context) {
+        if (boundary !== stopAt || context?.operationId !== operationId) return;
+        reached = true;
+        const error = new Error(`stop at ${stopAt}`);
+        error.code = 'DEADLINE_EXCEEDED';
+        throw error;
+      },
+    });
+  } finally {
+    releaseLock({ wikiRoot: root, token: owner.token });
+  }
+  assert.equal(reached, true, `prune never reached ${stopAt}`);
+}
+
+function createStalledQuarantine(root, options = {}) {
+  const stopAt = options.stopAt || 'before-backup-destination-link';
+  const seed = options.seed === undefined ? root : options.seed;
+  const createdId = productionEnsureId(`${seed}:created`);
+  const operationId = productionEnsureId(`${seed}:preserved`);
+  const journals = createCompletedEnsures(root, [
+    { operationId: createdId, proposed: PROPOSED },
+    { operationId, proposed: '2026-07-11T02:00:00Z' },
+  ]);
+  assert.deepEqual(journals.map((entry) => entry.resultStatus), ['created', 'preserved']);
+  const canonicalBytes = fs.readFileSync(journals[1].path);
+  const now = repairClockFromJournal(journals.map((entry) => entry.path));
+  stopPruneAt(root, operationId, stopAt, now);
+  const quarantines = quarantinesFor(root, operationId);
+  assert.equal(quarantines.length, 1);
+  return { createdId, operationId, canonicalBytes, now, quarantine: quarantines[0] };
+}
+
+// A byte-identical but separately linked backup/pending pair: what a sync client re-materializing
+// an already-published hardlink pair leaves behind.
+function makeBackupPublicationAmbiguous(quarantine) {
+  fs.copyFileSync(
+    path.join(quarantine, 'journal.backup.pending'),
+    path.join(quarantine, 'journal.backup'),
+    fs.constants.COPYFILE_EXCL,
+  );
+}
+
+function reinjectCanonicalDirectory(root, operationId, bytes) {
+  const directory = path.join(root, '.wiki-meta', '.transactions', operationId);
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, 'journal.json'), bytes);
+  return directory;
+}
+
+function addQuarantineGeneration(root, operationId, canonicalBytes, now) {
+  const before = new Set(quarantinesFor(root, operationId));
+  reinjectCanonicalDirectory(root, operationId, canonicalBytes);
+  stopPruneAt(root, operationId, 'before-backup-destination-link', now);
+  const added = quarantinesFor(root, operationId).filter((entry) => !before.has(entry));
+  assert.equal(added.length, 1);
+  makeBackupPublicationAmbiguous(added[0]);
+  return added[0];
+}
+
 module.exports = {
+  addQuarantineGeneration,
+  createStalledQuarantine,
+  makeBackupPublicationAmbiguous,
+  productionEnsureId,
+  quarantinesFor,
+  reinjectCanonicalDirectory,
+  stopPruneAt,
   completedEnsureCount,
   createCompletedEnsure,
   createCompletedEnsurePair,
